@@ -176,6 +176,11 @@ public:
     return vars.begin()+reps; 
   }
 
+
+  // Ands.
+  AigVec::const_iterator beginAnds() const { return aig.begin(); }
+  AigVec::const_iterator endAnds() const { return aig.end(); }
+
   // Next-state function for given latch.
   Minisat::Lit nextStateFn(const Var & latch) const {
     assert (latch.index() >= latches && latch.index() < reps);
@@ -210,6 +215,11 @@ public:
   // Use this method to allow the Model to decide how best to decide
   // if a cube has an initial state.
   bool isInitial(const LitVec & latches);
+
+  // helpful getters
+  const LitVec& getInitLits() const;
+  size_t getMaxVar() const;
+  size_t getAigMaxVar() const;
 
 private:
   VarVec vars;

@@ -22,6 +22,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 *********************************************************************/
 
 #include <algorithm>
+#include <fstream>
 #include <iostream>
 #include <set>
 #include <sys/times.h>
@@ -29,6 +30,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 #include "IC3.h"
 #include "Solver.h"
 #include "Vec.h"
+#include "Certificate.h"
 
 // A reference implementation of IC3, i.e., one that is meant to be
 // read and used as a starting point for tuning, extending, and
@@ -151,6 +153,14 @@ namespace IC3 {
            i != model.invariantConstraints().end(); ++i)
         cls.push(model.primeLit(~*i));
       lifts->addClause_(cls);
+      cls.clear();
+      notUnprimedInvConstraints = Minisat::mkLit(lifts->newVar());
+      cls.push(~notUnprimedInvConstraints);
+      for (LitVec::const_iterator i =
+          model.invariantConstraints().begin();
+          i != model.invariantConstraints().end(); ++i)
+        cls.push(~*i);
+      lifts->addClause_(cls);
     }
     ~IC3() {
       for (vector<Frame>::const_iterator i = frames.begin(); 
@@ -172,16 +182,47 @@ namespace IC3 {
       }
     }
 
+    string inputBits(const LitVec & inputs) {
+      string bits;
+      bits.reserve((size_t) (model.endInputs() - model.beginInputs()));
+      for (VarVec::const_iterator i = model.beginInputs();
+           i != model.endInputs(); ++i) {
+        char b = '0';
+        for (LitVec::const_iterator j = inputs.begin(); j != inputs.end(); ++j)
+          if (Minisat::var(*j) == i->var()) {
+            b = Minisat::sign(*j) ? '0' : '1';
+            break;
+          }
+        bits.push_back(b);
+      }
+      return bits;
+    }
+
     // Follows and prints chain of states from cexState forward.
    void printWitness() {
       if (cexState != 0) {
+        ostream * out = &cout;
+        ofstream cexFile;
+        if (certopt.cex_path != nullptr) {
+          if (verbose) cout << "Print CEX into: " << certopt.cex_path << endl;
+          cexFile.open(certopt.cex_path);
+          if (cexFile.is_open())
+            out = &cexFile;
+        }
+
+        (*out) << "1" << endl;
+        (*out) << "b0" << endl;
+        (*out) << string((size_t) (model.endLatches() - model.beginLatches()), '0') << endl;
+
         size_t curr = cexState;
         while (curr) {
-          cout << stringOfLitVec(state(curr).inputs) 
-               << stringOfLitVec(state(curr).latches) << endl;
+          (*out) << inputBits(state(curr).inputs) << endl;
           curr = state(curr).successor;
         }
-      }
+        if (!curr_bad_input.empty())
+          (*out) << inputBits(curr_bad_input) << endl;
+        (*out) << "." << endl;
+      }      
     }
 
   private:
@@ -243,30 +284,6 @@ namespace IC3 {
       nextState = 0;
     }
 
-    // A CubeSet is a set of ordered (by integer value) vectors of
-    // Minisat::Lits.
-    static bool _LitVecComp(const LitVec & v1, const LitVec & v2) {
-      if (v1.size() < v2.size()) return true;
-      if (v1.size() > v2.size()) return false;
-      for (size_t i = 0; i < v1.size(); ++i) {
-        if (v1[i] < v2[i]) return true;
-        if (v2[i] < v1[i]) return false;
-      }
-      return false;
-    }
-    static bool _LitVecEq(const LitVec & v1, const LitVec & v2) {
-      if (v1.size() != v2.size()) return false;
-      for (size_t i = 0; i < v1.size(); ++i)
-        if (v1[i] != v2[i]) return false;
-      return true;
-    }
-    class LitVecComp {
-    public:
-      bool operator()(const LitVec & v1, const LitVec & v2) {
-        return _LitVecComp(v1, v2);
-      }
-    };
-    typedef set<LitVec, LitVecComp> CubeSet;
 
     // A proof obligation.
     struct Obligation {
@@ -278,7 +295,7 @@ namespace IC3 {
     };
     class ObligationComp {
     public:
-      bool operator()(const Obligation & o1, const Obligation & o2) {
+      bool operator()(const Obligation & o1, const Obligation & o2) const {
         if (o1.level < o2.level) return true;  // prefer lower levels (required)
         if (o1.level > o2.level) return false;
         if (o1.depth < o2.depth) return true;  // prefer shallower (heuristic)
@@ -289,16 +306,11 @@ namespace IC3 {
     };
     typedef set<Obligation, ObligationComp> PriorityQueue;
 
-    // For IC3's overall frame structure.
-    struct Frame {
-      size_t k;             // steps from initial state
-      CubeSet borderCubes;  // additional cubes in this and previous frames
-      Minisat::Solver * consecution;
-    };
     vector<Frame> frames;
 
     Minisat::Solver * lifts;
     Minisat::Lit notInvConstraints;
+    Minisat::Lit notUnprimedInvConstraints;
 
     // Push a new Frame.
     void extend() {
@@ -391,6 +403,7 @@ namespace IC3 {
       Minisat::vec<Minisat::Lit> cls;
       cls.push(~act);
       cls.push(notInvConstraints);  // successor must satisfy inv. constraint
+      cls.push(notUnprimedInvConstraints);  // predecessor must satisfy inv. constraint
       if (succ == 0)
         cls.push(~model.primedError());
       else
@@ -435,7 +448,9 @@ namespace IC3 {
       ++nQuery; startTimer();  // stats
       bool rv = lifts->solve(assumps);
       endTimer(satTime);
-      assert (!rv);
+      if (rv) {
+        throw runtime_error("Lifting failed. Non-deterministic transition relation?");
+      }
       // obtain lifted latch set from unsat core
       for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
         if (lifts->conflict.has(~*i))
@@ -664,7 +679,8 @@ namespace IC3 {
       return level;
     }
 
-    size_t cexState;  // beginning of counterexample trace
+    size_t cexState;      // beginning of counterexample trace
+    LitVec curr_bad_input;
 
     // Process obligations according to priority.
     bool handleObligations(PriorityQueue obls) {
@@ -710,6 +726,13 @@ namespace IC3 {
         bool rv = frontier.consecution->solve(model.primedError());
         endTimer(satTime);
         if (!rv) return true;
+        curr_bad_input.clear();
+        for (VarVec::const_iterator i = model.beginInputs();
+             i != model.endInputs(); ++i) {
+          Minisat::lbool pval =
+            frontier.consecution->modelValue(model.primeVar(*i).var());
+          curr_bad_input.push_back(i->lit(pval == Minisat::l_False));
+        }
         // handle CTI with error successor
         ++nCTI;  // stats
         trivial = false;
@@ -721,6 +744,20 @@ namespace IC3 {
         // finished with States for this iteration, so clean up
         resetStates();
       }
+    }
+
+
+    CertOpt certopt;
+    // Certify the proof externally
+    void Certify(size_t invar_idx) {
+      if (verbose) {
+        cout << "Printing certificate: " << certopt.proof_cert_path << endl;
+      }
+      if (certopt.proof_cert_path == nullptr) {
+        Certificate cert{model, frames, invar_idx, "./certificate.aag"};
+      }
+      Certificate cert{model, frames, invar_idx, certopt.proof_cert_path};
+      cert.PrintCertificate();
     }
 
     // Propagates clauses forward using induction.  If any frame has
@@ -773,8 +810,10 @@ namespace IC3 {
         }
         if (verbose > 1)
           cout << i << " " << ckeep << " " << cprop << " " << cdrop << endl;
-        if (fr.borderCubes.empty())
+        if (fr.borderCubes.empty()) {
+          Certify(fr.k);
           return true;
+        }
       }
       // 3. simplify frames
       for (size_t i = trivial ? k : 1; i <= k+1; ++i)
@@ -814,7 +853,7 @@ namespace IC3 {
       if (numUpdates) cout << ". Avg lits/cls: " << numLits / numUpdates << endl;
     }
 
-    friend bool check(Model &, int, bool, bool);
+    friend bool check(Model &, int, bool, bool, const CertOpt &);
 
   };
 
@@ -841,10 +880,12 @@ namespace IC3 {
   }
 
   // External function to make the magic happen.
-  bool check(Model & model, int verbose, bool basic, bool random) {
+  bool check(Model & model, int verbose, bool basic, bool random,
+             const CertOpt & certopt) {
     if (!baseCases(model))
       return false;
     IC3 ic3(model);
+    ic3.certopt = certopt;
     ic3.verbose = verbose;
     if (basic) {
       ic3.maxDepth = 0;
@@ -853,7 +894,7 @@ namespace IC3 {
     }
     if (random) ic3.random = true;
     bool rv = ic3.check();
-    if (!rv && verbose > 1) ic3.printWitness();
+    if (!rv && (verbose > 1 || certopt.cex_path != nullptr)) ic3.printWitness();
     if (verbose) ic3.printStats();
     return rv;
   }

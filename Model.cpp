@@ -55,7 +55,9 @@ const Var & Model::primeVar(const Var & v, Minisat::SimpSolver * slv) {
     vars.push_back(Var(ss.str()));
     if (slv) {
       Minisat::Var _v = slv->newVar();
-      assert (_v == vars.back().var());
+      if (_v != vars.back().var()) {
+        throw runtime_error(string("Priming variable " + v.name() + " failed."));
+      }
     }
     assert (vars.back().index() == index);
     primedAnds.insert(IndexMap::value_type(v.index(), index));
@@ -70,7 +72,9 @@ Minisat::Solver * Model::newSolver() const {
   // load all variables to maintain alignment
   for (size_t i = 0; i < vars.size(); ++i) {
     Minisat::Var nv = slv->newVar();
-    assert (nv == vars[i].var());
+    if (nv != vars[i].var()) {
+      throw runtime_error("Variable alignment in solvers broken.");
+    }
   }
   return slv;
 }
@@ -81,8 +85,10 @@ void Model::loadTransitionRelation(Minisat::Solver & slv, bool primeConstraints)
     sslv = new Minisat::SimpSolver();
     // introduce all variables to maintain alignment
     for (size_t i = 0; i < vars.size(); ++i) {
-      Minisat::Var nv = sslv->newVar();
-      assert (nv == vars[i].var());
+      Minisat::Var nv = sslv->newVar();      
+      if (nv != vars[i].var()) {
+        throw runtime_error("Variable alignment in solvers broken.");
+      }
     }
     // freeze inputs, latches, and special nodes (and primed forms)
     for (VarVec::const_iterator i = beginInputs(); i != endInputs(); ++i) {
@@ -174,6 +180,7 @@ void Model::loadTransitionRelation(Minisat::Solver & slv, bool primeConstraints)
       slv.addClause(primeLit(*i));
 }
 
+
 void Model::loadInitialCondition(Minisat::Solver & slv) const {
   slv.addClause(btrue());
   for (LitVec::const_iterator i = init.begin(); i != init.end(); ++i)
@@ -241,6 +248,22 @@ bool Model::isInitial(const LitVec & latches) {
     for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
       assumps.push(*i);
     return inits->solve(assumps);
+  }
+}
+
+const LitVec& Model::getInitLits() const {
+  return this->init;
+}
+
+size_t Model::getMaxVar() const {
+  return vars.size();
+}
+
+size_t Model::getAigMaxVar() const {
+  if (aig.size() > 0) {
+    return Minisat::var((aig.end() - 1)->lhs);
+  } else {
+    return 1;
   }
 }
 
@@ -314,9 +337,8 @@ Model * modelFromAiger(aiger * aig, unsigned int propertyIndex) {
     ? lit(vars, aig->bad[propertyIndex].lit) 
     : lit(vars, aig->outputs[propertyIndex].lit);
 
-  size_t offset = 0;
   return new Model(vars, 
-                   offset += 1, offset += aig->num_inputs, 
-                   offset + aig->num_latches,
+                   1, 1 + aig->num_inputs, 
+                   1 + aig->num_inputs + aig->num_latches,
                    init, constraints, nextStateFns, err, aigv);
 }

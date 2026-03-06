@@ -1,5 +1,11 @@
-IC3 reference implementation: a short, simple, fairly competitive
-implementation of IC3.  Read it, tune it, extend it, play with it.
+This is basically IC3ref by Aaron Bradley. I have tweaked it a little bit though:
+
+Fixed issues: 
+-- undefined behaviour in model constructor call, 
+-- invalid lifting in rare cases with constraints present (see our paper "Everything You Always Wanted to Know About Generalization of Proof Obligations in PDR")
+-- c++23 compatible. 
+-- Added certification / valid aiger simulation trace witnesses.
+
 
 Copyright 2013, Aaron R. Bradley
 

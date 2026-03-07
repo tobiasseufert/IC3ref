@@ -34,6 +34,11 @@ Model::~Model() {
   if (sslv) delete sslv;
 }
 
+void Model::addVar(const Var & v) {
+  vars.push_back(v);
+  DrVar::incVars();
+}
+
 const Var & Model::primeVar(const Var & v, Minisat::SimpSolver * slv) {
   // var for false
   if (v.index() == 0) return v;
@@ -52,7 +57,7 @@ const Var & Model::primeVar(const Var & v, Minisat::SimpSolver * slv) {
     stringstream ss;
     ss << v.name() << "'";
     index = vars.size();
-    vars.push_back(Var(ss.str()));
+    addVar(Var(ss.str()));
     if (slv) {
       Minisat::Var _v = slv->newVar();
       if (_v != vars.back().var()) {
@@ -65,6 +70,10 @@ const Var & Model::primeVar(const Var & v, Minisat::SimpSolver * slv) {
   else
     index = i->second;
   return vars[index];
+}
+
+DrVar Model::newDrVar(Minisat::Solver& slv) {
+
 }
 
 Minisat::Solver * Model::newSolver() const {
@@ -208,6 +217,37 @@ void Model::loadInitialCondition(Minisat::Solver & slv) const {
     slv.addClause(*i);
 }
 
+void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate) const {
+  AddDrClause(~and_gate.lhs, and_gate.rhs0, slv);
+  AddDrClause(~and_gate.lhs, and_gate.rhs1, slv);
+  AddDrClause(~and_gate.rhs0, ~and_gate.rhs1, and_gate.lhs, slv);
+}
+
+void Model::loadDrInitialCondition(Minisat::Solver & slv) const {
+  AddDrClause(btrue(), slv);
+  for (LitVec::const_iterator i = init.begin(); i != init.end(); ++i)
+    AddDrClause(*i, slv);
+  if (constraints.empty())
+    return;
+  // impose invariant constraints on initial states (AIGER 1.9)
+  LitSet require;
+  require.insert(constraints.begin(), constraints.end());
+  for (AigVec::const_reverse_iterator i = aig.rbegin(); i != aig.rend(); ++i) {
+    // skip if this (*i) is not required
+    if (require.find(i->lhs) == require.end() 
+        && require.find(~i->lhs) == require.end())
+      continue;
+    // encode into CNF
+    loadDrAndTseitin(slv, *i);
+    // require arguments
+    require.insert(i->rhs0);
+    require.insert(i->rhs1);
+  }
+  for (LitVec::const_iterator i = constraints.begin(); 
+       i != constraints.end(); ++i)
+    AddDrClause(*i, slv);
+}
+
 void Model::loadError(Minisat::Solver & slv) const {
   LitSet require;  // unprimed formulas
   require.insert(_error);
@@ -286,15 +326,20 @@ Minisat::Lit lit(const VarVec & vars, unsigned int l) {
   return vars[l>>1].lit(aiger_sign(l));
 }
 
+void addVar(VarVec& vars, const Var& var) {
+  vars.push_back(var);
+  DrVar::incVars();
+}
+
 Model * modelFromAiger(aiger * aig, unsigned int propertyIndex) {
   VarVec vars(1, Var("false"));
   LitVec init, constraints, nextStateFns;
 
   // declare primary inputs and latches
   for (size_t i = 0; i < aig->num_inputs; ++i)
-    vars.push_back(var(aig->inputs, i, 'i'));
+    addVar(vars, var(aig->inputs, i, 'i'));
   for (size_t i = 0; i < aig->num_latches; ++i)
-    vars.push_back(var(aig->latches, i, 'l'));
+    addVar(vars, var(aig->latches, i, 'l'));
 
   // the AND section
   AigVec aigv;
@@ -302,7 +347,7 @@ Model * modelFromAiger(aiger * aig, unsigned int propertyIndex) {
     // 1. create a representative
     stringstream ss;
     ss << 'r' << i;
-    vars.push_back(Var(ss.str()));
+    addVar(vars, Var(ss.str()));
     const Var & rep = vars.back();
     // 2. obtain arguments of AND as lits
     Minisat::Lit l0 = lit(vars, aig->ands[i].rhs0);

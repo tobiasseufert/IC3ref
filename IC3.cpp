@@ -380,7 +380,6 @@ namespace IC3 {
       stable_sort(cube.begin(), cube.end(), slimLitOrder);
     }
 
-    typedef Minisat::vec<Minisat::Lit> MSLitVec;
 
     // Orders assumptions for Minisat.
     void orderAssumps(MSLitVec & cube, bool rev, int start = 0) {

@@ -40,6 +40,8 @@ extern "C" {
 // have std:: all over the place.
 using namespace std;
 
+typedef Minisat::vec<Minisat::Lit> MSLitVec;
+
 // A row of the AIGER spec: lhs = rhs0 & rhs1.
 struct AigRow {
   AigRow(Minisat::Lit _lhs, Minisat::Lit _rhs0, Minisat::Lit _rhs1) :
@@ -70,6 +72,118 @@ private:
 };
 
 typedef vector<Var> VarVec;
+
+enum class DrSign {
+  FALSE,
+  TRUE,
+  DC
+};
+
+// a simple dual-rail encoded literal wrapper:
+// zero <-> ~std_lit
+// one <-> std_lit
+// !zero & !one <-> DC
+// one & zero FORBIDDEN
+class DrVar {
+public:
+  DrVar(Minisat::Var std_var) {
+    zero = std_var;
+    one = std_var + num_std_vars;
+  }
+  static void incVars() {
+    ++num_std_vars;
+  }
+private:  
+  Minisat::Var zero;
+  Minisat::Var one;  
+
+  static size_t num_std_vars;
+  friend DrSign getDrModel(const DrVar&, const Minisat::Solver&);
+  friend class DrLit;
+};
+
+class DrLit {
+public:
+  DrLit(const DrVar& var, DrSign sign) {
+    switch (sign) {
+    case DrSign::FALSE:
+      zero = Minisat::mkLit(var.zero, false);
+      one = Minisat::mkLit(var.one, true);
+      break;
+    case DrSign::TRUE:
+      zero = Minisat::mkLit(var.zero, true);
+      one = Minisat::mkLit(var.one, false);
+      break;
+    case DrSign::DC:
+      zero = Minisat::mkLit(var.zero, true);
+      one = Minisat::mkLit(var.one, true);
+      break;
+    }
+    assert (one.x != zero.x);
+  }
+  DrLit(const DrVar& var, bool t_f_sign) {
+    zero = Minisat::mkLit(var.zero, !t_f_sign); // sign -> 1
+    one = Minisat::mkLit(var.zero, t_f_sign); // sign -> 0
+    assert (one.x != zero.x);
+  }
+private:
+  Minisat::Lit zero;
+  Minisat::Lit one;
+
+  friend void AssumeDrLit(Minisat::Lit, MSLitVec&);
+  friend void AddDrClause(Minisat::Lit, Minisat::Solver&);
+  friend void AddDrClause(Minisat::Lit, Minisat::Lit, Minisat::Solver&);
+  friend void AddDrClause(Minisat::Lit, Minisat::Lit, Minisat::Lit, Minisat::Solver&);
+};
+
+  
+static void AssumeDrLit(Minisat::Lit lit, MSLitVec& assumps) {
+  DrLit dr_lit{DrVar{Minisat::var(lit)}, Minisat::sign(lit)};
+  // either forcing 0 or 1
+  if (!Minisat::sign(dr_lit.zero)) { // lit = 0
+    assumps.push(dr_lit.zero);
+    return;
+  }
+  if (!Minisat::sign(dr_lit.one)) // lit = 1
+    assumps.push(dr_lit.one);
+}
+
+static void AddDrClause(Minisat::Lit lit, Minisat::Solver &slv) {
+  DrLit dr_lit{DrVar{Minisat::var(lit)}, Minisat::sign(lit)};
+  slv.addClause(!Minisat::sign(dr_lit.zero) ? dr_lit.zero : dr_lit.one);
+}
+static void AddDrClause(Minisat::Lit lit1, Minisat::Lit lit2, Minisat::Solver &slv) {
+  DrLit dr_lit1{DrVar{Minisat::var(lit1)}, Minisat::sign(lit1)};
+  DrLit dr_lit2{DrVar{Minisat::var(lit2)}, Minisat::sign(lit2)};
+  assert (Minisat::sign(dr_lit1.zero) != Minisat::sign(dr_lit1.one));
+  assert (Minisat::sign(dr_lit2.zero) != Minisat::sign(dr_lit2.one));
+  Minisat::Lit l1 = !Minisat::sign(dr_lit1.zero) ? dr_lit1.zero : dr_lit1.one;
+  Minisat::Lit l2 = !Minisat::sign(dr_lit2.zero) ? dr_lit2.zero : dr_lit2.one;
+  slv.addClause(l1, l2);
+}
+static void AddDrClause(Minisat::Lit lit1, Minisat::Lit lit2, Minisat::Lit lit3, Minisat::Solver &slv) {
+  DrLit dr_lit1{DrVar{Minisat::var(lit1)}, Minisat::sign(lit1)};
+  DrLit dr_lit2{DrVar{Minisat::var(lit2)}, Minisat::sign(lit2)};
+  DrLit dr_lit3{DrVar{Minisat::var(lit3)}, Minisat::sign(lit3)};
+  Minisat::Lit l1 = !Minisat::sign(dr_lit1.zero) ? dr_lit1.zero : dr_lit1.one;
+  Minisat::Lit l2 = !Minisat::sign(dr_lit2.zero) ? dr_lit2.zero : dr_lit2.one;
+  Minisat::Lit l3 = !Minisat::sign(dr_lit3.zero) ? dr_lit3.zero : dr_lit3.one;
+  slv.addClause(l1, l2, l3);
+}
+// takes a DrVar
+inline DrSign getDrModel(const DrVar& var, const Minisat::Solver& slv) {
+  Minisat::Var var_zero = var.zero;
+  Minisat::Var var_one = var.one;
+  bool zero_val = slv.modelValue(var_zero) == Minisat::l_True;
+  bool one_val = slv.modelValue(var_one) == Minisat::l_True;
+  
+  if (zero_val && !one_val) return DrSign::FALSE;
+  if (!zero_val && one_val) return DrSign::TRUE;
+  if (!zero_val && !one_val) return DrSign::DC;
+  
+  assert (false);
+  return DrSign::DC; // shouldn't reach here
+}
 
 class VarComp {
 public:
@@ -115,6 +229,9 @@ public:
       primeLit(*i);
   }
   ~Model();
+
+  // get a new dual-rail variable
+  DrVar newDrVar(Minisat::Solver& slv);
 
   // Returns the Var of the given Minisat::Lit.
   const Var & varOfLit(Minisat::Lit lit) const {
@@ -208,6 +325,7 @@ public:
                               bool primeConstraints = true);
   // Loads the initial condition into the solver.
   void loadInitialCondition(Minisat::Solver & slv) const;
+  void loadDrInitialCondition(Minisat::Solver & slv) const;
   // Loads the error into the solver, which is only necessary for the
   // 0-step base case of IC3.
   void loadError(Minisat::Solver & slv) const;
@@ -242,6 +360,9 @@ private:
   LitSet initLits;
 
   Minisat::SimpSolver * sslv;
+
+  void loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate) const;
+  void addVar(const Var& v);
 
 };
 

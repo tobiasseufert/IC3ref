@@ -39,7 +39,7 @@ void Model::addVar(const Var & v) {
   DrVar::incVars();
 }
 
-const Var & Model::primeVar(const Var & v, Minisat::SimpSolver * slv) {
+const Var & Model::primeVar(const Var & v, Minisat::Solver * slv) {
   // var for false
   if (v.index() == 0) return v;
   // latch or PI
@@ -72,16 +72,24 @@ const Var & Model::primeVar(const Var & v, Minisat::SimpSolver * slv) {
   return vars[index];
 }
 
-DrVar Model::newDrVar(Minisat::Solver& slv) {
-
-}
-
 Minisat::Solver * Model::newSolver() const {
   Minisat::Solver * slv = new Minisat::Solver();
   // load all variables to maintain alignment
   for (size_t i = 0; i < vars.size(); ++i) {
     Minisat::Var nv = slv->newVar();
     if (nv != vars[i].var()) {
+      throw runtime_error("Variable alignment in solvers broken.");
+    }
+  }
+  return slv;
+}
+Minisat::Solver * Model::newDrSolver() const {
+  Minisat::Solver * slv = new Minisat::Solver();
+  // load all variables to maintain alignment
+  for (size_t i = 0; i < vars.size(); ++i) {
+    Minisat::Var nv = slv->newVar();
+    Minisat::Var nv_dual = slv->newVar();
+    if ((nv_dual / 2) != vars[i].var()) {
       throw runtime_error("Variable alignment in solvers broken.");
     }
   }
@@ -190,6 +198,98 @@ void Model::loadTransitionRelation(Minisat::Solver & slv, bool primeConstraints)
 }
 
 
+void Model::loadDrTransitionRelation(Minisat::Solver & slv, bool primeConstraints) {
+  if (!sslv) {
+    // create a simplified CNF version of (this slice of) the TR
+    sslv = new Minisat::SimpSolver();
+    // introduce all variables to maintain alignment
+    for (size_t i = 0; i < vars.size(); ++i) {
+      Minisat::Var nv = sslv->newVar();
+      Minisat::Var nv_dual = sslv->newVar();      
+      if ((nv_dual / 2) != vars[i].var()) {
+        throw runtime_error("Variable alignment in solvers broken.");
+      }
+    }
+    // freeze inputs, latches, and special nodes (and primed forms)
+    for (VarVec::const_iterator i = beginInputs(); i != endInputs(); ++i) {
+      FreezeDrVar(i->var(), *sslv);
+      FreezeDrVar(primeVar(*i).var(), *sslv);
+    }
+    for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
+      FreezeDrVar(i->var(), *sslv);
+      FreezeDrVar(primeVar(*i).var(), *sslv);
+    }
+    FreezeDrVar(varOfLit(error()).var(), *sslv);
+    FreezeDrVar(varOfLit(primedError()).var(), *sslv);
+    for (LitVec::const_iterator i = constraints.begin(); 
+         i != constraints.end(); ++i) {
+      Var v = varOfLit(*i);
+      FreezeDrVar(v.var(), *sslv);
+      FreezeDrVar(primeVar(v).var(), *sslv);
+    }
+    // initialize with roots of required formulas
+    LitSet require;  // unprimed formulas
+    for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i)
+      require.insert(nextStateFn(*i));
+    require.insert(_error);
+    require.insert(constraints.begin(), constraints.end());
+    LitSet prequire; // for primed formulas; always subset of require
+    prequire.insert(_error);
+    prequire.insert(constraints.begin(), constraints.end());
+    // traverse AIG backward
+    for (AigVec::const_reverse_iterator i = aig.rbegin(); 
+         i != aig.rend(); ++i) {
+      // skip if this row is not required
+      if (require.find(i->lhs) == require.end() 
+          && require.find(~i->lhs) == require.end())
+        continue;
+      // encode into CNF
+      loadDrAndTseitin(*sslv, *i);
+      // require arguments
+      require.insert(i->rhs0);
+      require.insert(i->rhs1);
+      // primed: skip if not required
+      if (prequire.find(i->lhs) == prequire.end()
+          && prequire.find(~i->lhs) == prequire.end())
+        continue;
+      // encode PRIMED form into CNF
+      loadDrAndTseitin(*sslv, *i, true);
+      // require arguments
+      prequire.insert(i->rhs0);
+      prequire.insert(i->rhs1);
+    }
+    // assert literal for true
+    AddDrClause(btrue(), *sslv);
+    // assert ~error, constraints, and primed constraints
+    AddDrClause(~_error, *sslv);
+    for (LitVec::const_iterator i = constraints.begin(); 
+         i != constraints.end(); ++i) {
+      AddDrClause(*i, *sslv);
+    }
+    // assert l' = f for each latch l
+    for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
+      Minisat::Lit platch = primeLit(i->lit(false)), f = nextStateFn(*i);
+      AddDrClause(~platch, f, *sslv);
+      AddDrClause(~f, platch, *sslv);
+    }
+    sslv->eliminate(true);
+  }
+  // load the clauses from the simplified context
+  while (slv.nVars() < sslv->nVars()) slv.newVar();
+  for (Minisat::ClauseIterator c = sslv->clausesBegin(); 
+       c != sslv->clausesEnd(); ++c) {
+    const Minisat::Clause & cls = *c;
+    AddDrClause(cls, slv);
+  }
+  for (Minisat::TrailIterator c = sslv->trailBegin(); 
+       c != sslv->trailEnd(); ++c)
+    AddDrClause(*c, slv);
+  if (primeConstraints)
+    for (LitVec::const_iterator i = constraints.begin(); 
+         i != constraints.end(); ++i)
+      AddDrClause(primeLit(*i), slv);
+}
+
 void Model::loadInitialCondition(Minisat::Solver & slv) const {
   slv.addClause(btrue());
   for (LitVec::const_iterator i = init.begin(); i != init.end(); ++i)
@@ -217,13 +317,17 @@ void Model::loadInitialCondition(Minisat::Solver & slv) const {
     slv.addClause(*i);
 }
 
-void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate) const {
-  AddDrClause(~and_gate.lhs, and_gate.rhs0, slv);
-  AddDrClause(~and_gate.lhs, and_gate.rhs1, slv);
-  AddDrClause(~and_gate.rhs0, ~and_gate.rhs1, and_gate.lhs, slv);
+void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime) {
+  Minisat::Lit lhs, rhs0, rhs1;
+  lhs = prime? primeLit(and_gate.lhs, &slv) : and_gate.lhs;
+  lhs = prime? primeLit(and_gate.rhs0, &slv) : and_gate.rhs0;
+  lhs = prime? primeLit(and_gate.rhs1, &slv) : and_gate.rhs1;
+  AddDrClause(~lhs, rhs0, slv);
+  AddDrClause(~lhs, rhs1, slv);
+  AddDrClause(~rhs0, ~rhs1, lhs, slv);
 }
 
-void Model::loadDrInitialCondition(Minisat::Solver & slv) const {
+void Model::loadDrInitialCondition(Minisat::Solver & slv) {
   AddDrClause(btrue(), slv);
   for (LitVec::const_iterator i = init.begin(); i != init.end(); ++i)
     AddDrClause(*i, slv);

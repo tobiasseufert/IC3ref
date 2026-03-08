@@ -99,6 +99,7 @@ private:
 
   static size_t num_std_vars;
   friend DrSign getDrModel(const DrVar&, const Minisat::Solver&);
+  friend void FreezeDrVar(Minisat::Var, Minisat::SimpSolver&);
   friend class DrLit;
 };
 
@@ -134,8 +135,15 @@ private:
   friend void AddDrClause(Minisat::Lit, Minisat::Solver&);
   friend void AddDrClause(Minisat::Lit, Minisat::Lit, Minisat::Solver&);
   friend void AddDrClause(Minisat::Lit, Minisat::Lit, Minisat::Lit, Minisat::Solver&);
+  friend void AddDrClause(const Minisat::Clause&, Minisat::Solver&);
 };
 
+
+static void FreezeDrVar(Minisat::Var var, Minisat::SimpSolver& sslv) {
+  DrVar dr_var{var};
+  sslv.setFrozen(dr_var.zero, true);
+  sslv.setFrozen(dr_var.one, true);
+}
   
 static void AssumeDrLit(Minisat::Lit lit, MSLitVec& assumps) {
   DrLit dr_lit{DrVar{Minisat::var(lit)}, Minisat::sign(lit)};
@@ -169,6 +177,17 @@ static void AddDrClause(Minisat::Lit lit1, Minisat::Lit lit2, Minisat::Lit lit3,
   Minisat::Lit l2 = !Minisat::sign(dr_lit2.zero) ? dr_lit2.zero : dr_lit2.one;
   Minisat::Lit l3 = !Minisat::sign(dr_lit3.zero) ? dr_lit3.zero : dr_lit3.one;
   slv.addClause(l1, l2, l3);
+}
+static void AddDrClause(const Minisat::Clause& cl, Minisat::Solver& slv) {
+  MSLitVec new_cl;
+  new_cl.capacity(cl.size());
+  for (auto i = 0; i < cl.size(); ++i) {
+    Minisat::Lit lit = cl[i];
+    DrLit dr_lit{DrVar{Minisat::var(lit)}, Minisat::sign(lit)};
+    Minisat::Lit cl_lit = !Minisat::sign(dr_lit.zero) ? dr_lit.zero : dr_lit.one;
+    new_cl.push(cl_lit);
+  }
+  slv.addClause_(new_cl);
 }
 // takes a DrVar
 inline DrSign getDrModel(const DrVar& var, const Minisat::Solver& slv) {
@@ -230,9 +249,6 @@ public:
   }
   ~Model();
 
-  // get a new dual-rail variable
-  DrVar newDrVar(Minisat::Solver& slv);
-
   // Returns the Var of the given Minisat::Lit.
   const Var & varOfLit(Minisat::Lit lit) const {
     Minisat::Var v = Minisat::var(lit);
@@ -252,8 +268,8 @@ public:
   // Var/Minisat::Lit.  Once lockPrimes() is called, primeVar() fails
   // (with an assertion violation) if it is asked to create a new
   // variable.
-  const Var & primeVar(const Var & v, Minisat::SimpSolver * slv = NULL);
-  Minisat::Lit primeLit(Minisat::Lit lit, Minisat::SimpSolver * slv = NULL) {
+  const Var & primeVar(const Var & v, Minisat::Solver * slv = NULL);
+  Minisat::Lit primeLit(Minisat::Lit lit, Minisat::Solver * slv = NULL) {
     const Var & pv = primeVar(varOfLit(lit), slv);
     return pv.lit(Minisat::sign(lit));
   }
@@ -314,6 +330,7 @@ public:
   // Creates a Solver and initializes its variables to maintain
   // alignment with the Model's variables.
   Minisat::Solver * newSolver() const;
+  Minisat::Solver * newDrSolver() const;
 
   // Loads the TR into the solver.  Also loads the primed error
   // definition such that Model::primedError() need only be asserted
@@ -323,9 +340,11 @@ public:
   // !primeConstraints.
   void loadTransitionRelation(Minisat::Solver & slv, 
                               bool primeConstraints = true);
+  void loadDrTransitionRelation(Minisat::Solver & slv, 
+                              bool primeConstraints = true);
   // Loads the initial condition into the solver.
   void loadInitialCondition(Minisat::Solver & slv) const;
-  void loadDrInitialCondition(Minisat::Solver & slv) const;
+  void loadDrInitialCondition(Minisat::Solver & slv);
   // Loads the error into the solver, which is only necessary for the
   // 0-step base case of IC3.
   void loadError(Minisat::Solver & slv) const;
@@ -361,7 +380,7 @@ private:
 
   Minisat::SimpSolver * sslv;
 
-  void loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate) const;
+  void loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime = false);
   void addVar(const Var& v);
 
 };

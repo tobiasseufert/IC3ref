@@ -375,6 +375,14 @@ namespace IC3 {
           state(st).latches.push_back(la);
         }
       }
+#ifndef NDEBUG
+      float newi = state(st).inputs.size();
+      float alli = (model.endInputs() - model.beginInputs());
+      cout << "Reduced inp to " << (newi / alli) << " of all inps." << endl;
+      float news = state(st).latches.size();
+      float all = (model.endLatches() - model.beginLatches());
+      cout << "Reduced POB to " << (news / all) << " of all latches." << endl;
+#endif 
       return st;
     }
 

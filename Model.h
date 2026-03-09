@@ -295,7 +295,8 @@ public:
 
   bool isInput(Minisat::Var v) const {
     assert (v >= 0);
-    return (v > 0 && static_cast<size_t>(v) < latches);
+    return ((v > 0 && static_cast<size_t>(v) < latches) ||
+            (static_cast<size_t>(v) >= primes && static_cast<size_t>(v) < (primes+latches)));
   }
 
 private:

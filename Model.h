@@ -79,130 +79,64 @@ enum class DrSign {
   DC
 };
 
+class DrVar;
+
 // a simple dual-rail encoded literal wrapper:
 // zero <-> ~std_lit
 // one <-> std_lit
 // !zero & !one <-> DC
 // one & zero FORBIDDEN
-class DrVar {
-public:
-  DrVar(Minisat::Var std_var) {
-    zero = std_var;
-    one = std_var + num_std_vars;
-  }
-  static void incVars() {
-    ++num_std_vars;
-  }
-private:  
-  Minisat::Var zero;
-  Minisat::Var one;  
-
-  static size_t num_std_vars;
-  friend DrSign getDrModel(const DrVar&, const Minisat::Solver&);
-  friend void FreezeDrVar(Minisat::Var, Minisat::SimpSolver&);
-  friend class DrLit;
-};
-
 class DrLit {
 public:
-  DrLit(const DrVar& var, DrSign sign) {
-    switch (sign) {
-    case DrSign::FALSE:
-      zero = Minisat::mkLit(var.zero, false);
-      one = Minisat::mkLit(var.one, true);
-      break;
-    case DrSign::TRUE:
-      zero = Minisat::mkLit(var.zero, true);
-      one = Minisat::mkLit(var.one, false);
-      break;
-    case DrSign::DC:
-      zero = Minisat::mkLit(var.zero, true);
-      one = Minisat::mkLit(var.one, true);
-      break;
-    }
-    assert (one.x != zero.x);
-  }
-  DrLit(const DrVar& var, bool t_f_sign) {
-    zero = Minisat::mkLit(var.zero, !t_f_sign); // sign -> 1
-    one = Minisat::mkLit(var.zero, t_f_sign); // sign -> 0
-    assert (one.x != zero.x);
-  }
+  DrLit(const DrVar& var, DrSign sign);
+  DrLit(const DrVar& var, bool t_f_sign);
+  DrLit(Minisat::Lit std_lit);
+  bool IsDontCare() const;
+  bool IsInFinalConflict(Minisat::Solver& slv) const;
+  Minisat::Lit GetLitIfDef() const;
 private:
   Minisat::Lit zero;
   Minisat::Lit one;
 
   friend void AssumeDrLit(Minisat::Lit, MSLitVec&);
+  friend void AssumeIndexedDrLit(Minisat::Lit, MSLitVec&, int);
   friend void AddDrClause(Minisat::Lit, Minisat::Solver&);
   friend void AddDrClause(Minisat::Lit, Minisat::Lit, Minisat::Solver&);
   friend void AddDrClause(Minisat::Lit, Minisat::Lit, Minisat::Lit, Minisat::Solver&);
   friend void AddDrClause(const Minisat::Clause&, Minisat::Solver&);
+  friend void AddDrClause(const MSLitVec&, Minisat::Solver&);
+};
+class DrVar {
+public:
+  DrVar(Minisat::Var std_var);
+  static void incVars() {
+    ++num_std_vars;
+  }
+  void AddOneOneExclusionCl(Minisat::Solver& slv);
+  Minisat::Var GetCorres() {return this->one;}
+private:  
+  Minisat::Var zero;
+  Minisat::Var one;  
+
+  static size_t num_std_vars;
+  friend DrLit getDrModel(const Var&, const Minisat::Solver&);
+  friend void FreezeDrVar(Minisat::Var, Minisat::SimpSolver&);
+  friend class DrLit;
 };
 
 
-static void FreezeDrVar(Minisat::Var var, Minisat::SimpSolver& sslv) {
-  DrVar dr_var{var};
-  sslv.setFrozen(dr_var.zero, true);
-  sslv.setFrozen(dr_var.one, true);
-}
-  
-static void AssumeDrLit(Minisat::Lit lit, MSLitVec& assumps) {
-  DrLit dr_lit{DrVar{Minisat::var(lit)}, Minisat::sign(lit)};
-  // either forcing 0 or 1
-  if (!Minisat::sign(dr_lit.zero)) { // lit = 0
-    assumps.push(dr_lit.zero);
-    return;
-  }
-  if (!Minisat::sign(dr_lit.one)) // lit = 1
-    assumps.push(dr_lit.one);
-}
+void FreezeDrVar(Minisat::Var var, Minisat::SimpSolver& sslv);
+void AssumeDrLit(Minisat::Lit lit, MSLitVec& assumps);
+void AssumeIndexedDrLit(Minisat::Lit lit, MSLitVec& assumps, int idx);
+void AddDrLitToCl(Minisat::Lit lit, MSLitVec& cl);
+void AddDrClause(Minisat::Lit lit, Minisat::Solver &slv);
+void AddDrClause(Minisat::Lit lit1, Minisat::Lit lit2, Minisat::Solver &slv);
+void AddDrClause(Minisat::Lit lit1, Minisat::Lit lit2, Minisat::Lit lit3, Minisat::Solver &slv);
+void AddDrClause(const Minisat::Clause& cl, Minisat::Solver& slv);
+void AddDrClause(const MSLitVec& cl, Minisat::Solver& slv);
+DrLit getDrModel(const Var& var, const Minisat::Solver& slv);
 
-static void AddDrClause(Minisat::Lit lit, Minisat::Solver &slv) {
-  DrLit dr_lit{DrVar{Minisat::var(lit)}, Minisat::sign(lit)};
-  slv.addClause(!Minisat::sign(dr_lit.zero) ? dr_lit.zero : dr_lit.one);
-}
-static void AddDrClause(Minisat::Lit lit1, Minisat::Lit lit2, Minisat::Solver &slv) {
-  DrLit dr_lit1{DrVar{Minisat::var(lit1)}, Minisat::sign(lit1)};
-  DrLit dr_lit2{DrVar{Minisat::var(lit2)}, Minisat::sign(lit2)};
-  assert (Minisat::sign(dr_lit1.zero) != Minisat::sign(dr_lit1.one));
-  assert (Minisat::sign(dr_lit2.zero) != Minisat::sign(dr_lit2.one));
-  Minisat::Lit l1 = !Minisat::sign(dr_lit1.zero) ? dr_lit1.zero : dr_lit1.one;
-  Minisat::Lit l2 = !Minisat::sign(dr_lit2.zero) ? dr_lit2.zero : dr_lit2.one;
-  slv.addClause(l1, l2);
-}
-static void AddDrClause(Minisat::Lit lit1, Minisat::Lit lit2, Minisat::Lit lit3, Minisat::Solver &slv) {
-  DrLit dr_lit1{DrVar{Minisat::var(lit1)}, Minisat::sign(lit1)};
-  DrLit dr_lit2{DrVar{Minisat::var(lit2)}, Minisat::sign(lit2)};
-  DrLit dr_lit3{DrVar{Minisat::var(lit3)}, Minisat::sign(lit3)};
-  Minisat::Lit l1 = !Minisat::sign(dr_lit1.zero) ? dr_lit1.zero : dr_lit1.one;
-  Minisat::Lit l2 = !Minisat::sign(dr_lit2.zero) ? dr_lit2.zero : dr_lit2.one;
-  Minisat::Lit l3 = !Minisat::sign(dr_lit3.zero) ? dr_lit3.zero : dr_lit3.one;
-  slv.addClause(l1, l2, l3);
-}
-static void AddDrClause(const Minisat::Clause& cl, Minisat::Solver& slv) {
-  MSLitVec new_cl;
-  new_cl.capacity(cl.size());
-  for (auto i = 0; i < cl.size(); ++i) {
-    Minisat::Lit lit = cl[i];
-    DrLit dr_lit{DrVar{Minisat::var(lit)}, Minisat::sign(lit)};
-    Minisat::Lit cl_lit = !Minisat::sign(dr_lit.zero) ? dr_lit.zero : dr_lit.one;
-    new_cl.push(cl_lit);
-  }
-  slv.addClause_(new_cl);
-}
-// takes a DrVar
-inline DrSign getDrModel(const DrVar& var, const Minisat::Solver& slv) {
-  Minisat::Var var_zero = var.zero;
-  Minisat::Var var_one = var.one;
-  bool zero_val = slv.modelValue(var_zero) == Minisat::l_True;
-  bool one_val = slv.modelValue(var_one) == Minisat::l_True;
-  
-  if (zero_val && !one_val) return DrSign::FALSE;
-  if (!zero_val && one_val) return DrSign::TRUE;
-  if (!zero_val && !one_val) return DrSign::DC;
-  
-  assert (false);
-  return DrSign::DC; // shouldn't reach here
-}
+
 
 class VarComp {
 public:
@@ -238,7 +172,7 @@ public:
     for (size_t i = inputs; i < reps; ++i) {
       stringstream ss;
       ss << vars[i].name() << "'";
-      vars.push_back(Var(ss.str()));
+      addVar(Var(ss.str()));
     }
     // same with primed error
     _primedError = primeLit(_error);
@@ -338,8 +272,7 @@ public:
   // negation of the error are always added --- except that the primed
   // form of the invariant constraints are not asserted if
   // !primeConstraints.
-  void loadTransitionRelation(Minisat::Solver & slv, 
-                              bool primeConstraints = true);
+  void loadTransitionRelation(Minisat::Solver & slv);
   void loadDrTransitionRelation(Minisat::Solver & slv, 
                               bool primeConstraints = true);
   // Loads the initial condition into the solver.
@@ -382,6 +315,7 @@ private:
 
   void loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime = false);
   void addVar(const Var& v);
+  void initSimplifiedContext();
 
 };
 

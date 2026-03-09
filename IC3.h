@@ -64,7 +64,7 @@ namespace IC3 {
              int verbose = 0,       // 0: silent, 1: stats, 2: informative
              bool basic = false,    // simple inductive generalization
              bool random = false,   // random runs for statistical profiling
-             const CertOpt & certopt = CertOpt());
+             const CertOpt & certopt = CertOpt{});
 
 }
 

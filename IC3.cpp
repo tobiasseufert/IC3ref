@@ -47,21 +47,7 @@ WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 //    obligations, and induction-based generalization.  See check(),
 //    strengthen(), handleObligations(), mic(), propagate().
 //
-//  o Lifting, inspired by
-//
-//      Niklas Een, Alan Mishchenko, Robert Brayton, "Efficient
-//      Implementation of Property Directed Reachability," FMCAD'11
-//
-//    Each CTI is lifted to a larger cube whose states all have the
-//    same successor.  The implementation is based on
-//
-//      H. Chockler, A. Ivrii, A. Matsliah, S. Moran, and Z. Nevo,
-//      "Incremental Formal Veriﬁcation of Hardware," FMCAD'11.
-//
-//    In particular, if s with inputs i is a predecessor of t, then s
-//    & i & T & ~t' is unsatisfiable, where T is the transition
-//    relation.  The unsat core reveals a suitable lifting of s.  See
-//    stateOf().
+//  o Lifting -> a gift from dual-rail encoding
 //
 //  o One solver per frame, which various authors of IC3
 //    implementations have tried (including me in pre-publication
@@ -140,33 +126,11 @@ namespace IC3 {
       nmic(0), satTime(0), nCoreReduced(0), nAbortJoin(0), nAbortMic(0)
     {
       slimLitOrder.heuristicLitOrder = &litOrder;
-
-      // construct lifting solver
-      lifts = model.newSolver();
-      // don't assert primed invariant constraints
-      model.loadTransitionRelation(*lifts, false);
-      // assert notInvConstraints (in stateOf) when lifting
-      notInvConstraints = Minisat::mkLit(lifts->newVar());
-      Minisat::vec<Minisat::Lit> cls;
-      cls.push(~notInvConstraints);
-      for (LitVec::const_iterator i = model.invariantConstraints().begin();
-           i != model.invariantConstraints().end(); ++i)
-        cls.push(model.primeLit(~*i));
-      lifts->addClause_(cls);
-      cls.clear();
-      notUnprimedInvConstraints = Minisat::mkLit(lifts->newVar());
-      cls.push(~notUnprimedInvConstraints);
-      for (LitVec::const_iterator i =
-          model.invariantConstraints().begin();
-          i != model.invariantConstraints().end(); ++i)
-        cls.push(~*i);
-      lifts->addClause_(cls);
     }
     ~IC3() {
       for (vector<Frame>::const_iterator i = frames.begin(); 
            i != frames.end(); ++i)
         if (i->consecution) delete i->consecution;
-      delete lifts;
     }
 
     // The main loop.
@@ -308,7 +272,6 @@ namespace IC3 {
 
     vector<Frame> frames;
 
-    Minisat::Solver * lifts;
     Minisat::Lit notInvConstraints;
     Minisat::Lit notUnprimedInvConstraints;
 
@@ -318,13 +281,13 @@ namespace IC3 {
         frames.resize(frames.size()+1);
         Frame & fr = frames.back();
         fr.k = frames.size()-1;
-        fr.consecution = model.newSolver();
+        fr.consecution = model.newDrSolver();
         if (random) {
           fr.consecution->random_seed = rand();
           fr.consecution->rnd_init_act = true;
         }
-        if (fr.k == 0) model.loadInitialCondition(*fr.consecution);
-        model.loadTransitionRelation(*fr.consecution);
+        if (fr.k == 0) model.loadDrInitialCondition(*fr.consecution);
+        model.loadDrTransitionRelation(*fr.consecution);
       }
     }
 
@@ -387,75 +350,31 @@ namespace IC3 {
       if (rev) reverse(cube + start, cube + cube.size());
     }
 
-    // Assumes that last call to fr.consecution->solve() was
-    // satisfiable.  Extracts state(s) cube from satisfying
-    // assignment.
+    // extract (01X-generalized) predecessor state
     size_t stateOf(Frame & fr, size_t succ = 0) {
       // create state
       size_t st = newState();
       state(st).successor = succ;
-      MSLitVec assumps;
-      assumps.capacity(1 + 2 * (model.endInputs()-model.beginInputs())
-                       + (model.endLatches()-model.beginLatches()));
-      Minisat::Lit act = Minisat::mkLit(lifts->newVar());  // activation literal
-      assumps.push(act);
-      Minisat::vec<Minisat::Lit> cls;
-      cls.push(~act);
-      cls.push(notInvConstraints);  // successor must satisfy inv. constraint
-      cls.push(notUnprimedInvConstraints);  // predecessor must satisfy inv. constraint
-      if (succ == 0)
-        cls.push(~model.primedError());
-      else
-        for (LitVec::const_iterator i = state(succ).latches.begin(); 
-             i != state(succ).latches.end(); ++i)
-          cls.push(model.primeLit(~*i));
-      lifts->addClause_(cls);
-      // extract and assert primary inputs
+      // extract primary inputs (can also be 01X-generalized)
+      // FIXME: we actually want full assignments here. Is it possible
+      // to tweak the decision heuristics somehow? Think about it.
       for (VarVec::const_iterator i = model.beginInputs(); 
            i != model.endInputs(); ++i) {
-        Minisat::lbool val = fr.consecution->modelValue(i->var());
-        if (val != Minisat::l_Undef) {
-          Minisat::Lit pi = i->lit(val == Minisat::l_False);
+        DrLit lit_dr = getDrModel(*i, *(fr.consecution));
+        if (!lit_dr.IsDontCare()) {
+          Minisat::Lit pi = lit_dr.GetLitIfDef();
           state(st).inputs.push_back(pi);  // record full inputs
-          assumps.push(pi);
         }
       }
-      // some properties include inputs, so assert primed inputs after        
-      for (VarVec::const_iterator i = model.beginInputs(); 
-           i != model.endInputs(); ++i) {
-        Minisat::lbool pval = 
-          fr.consecution->modelValue(model.primeVar(*i).var());
-        if (pval != Minisat::l_Undef)
-          assumps.push(model.primeLit(i->lit(pval == Minisat::l_False)));
-      }
-      int sz = assumps.size();
-      // extract and assert latches
-      LitVec latches;
+      // extract latches
       for (VarVec::const_iterator i = model.beginLatches(); 
            i != model.endLatches(); ++i) {
-        Minisat::lbool val = fr.consecution->modelValue(i->var());
-        if (val != Minisat::l_Undef) {
-          Minisat::Lit la = i->lit(val == Minisat::l_False);
-          latches.push_back(la);
-          assumps.push(la);
+        DrLit lit_dr = getDrModel(*i, *(fr.consecution));
+        if (!lit_dr.IsDontCare()) {
+          Minisat::Lit la = lit_dr.GetLitIfDef();
+          state(st).latches.push_back(la);
         }
       }
-      orderAssumps(assumps, false, sz);  // empirically found to be best choice
-      // State s, inputs i, transition relation T, successor t:
-      //   s & i & T & ~t' is unsat
-      // Core assumptions reveal a lifting of s.
-      ++nQuery; startTimer();  // stats
-      bool rv = lifts->solve(assumps);
-      endTimer(satTime);
-      if (rv) {
-        throw runtime_error("Lifting failed. Non-deterministic transition relation?");
-      }
-      // obtain lifted latch set from unsat core
-      for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-        if (lifts->conflict.has(~*i))
-          state(st).latches.push_back(*i);  // record lifted latches
-      // deactivate negation of successor
-      lifts->releaseVar(~act);
       return st;
     }
 
@@ -481,15 +400,19 @@ namespace IC3 {
       cls.push(~act);
       for (LitVec::const_iterator i = latches.begin(); 
            i != latches.end(); ++i) {
-        cls.push(~*i);
-        assumps.push(*i);  // push unprimed...
+        AddDrLitToCl(~*i, cls);
+        // push unprimed...
+        assumps.push(*i); 
       }
       // ... order... (empirically found to best choice)
       if (pred) orderAssumps(assumps, false, 1);
       else orderAssumps(assumps, orderedCore, 1);
       // ... now prime
-      for (int i = 1; i < assumps.size(); ++i)
-        assumps[i] = model.primeLit(assumps[i]);
+      for (int i = 1; i < assumps.size(); ++i) {
+        // also consider DR encoding here
+        AssumeIndexedDrLit(model.primeLit(assumps[i]),
+                            assumps, i);
+      }
       fr.consecution->addClause_(cls);
       // F_fi & ~latches & T & latches'
       ++nQuery; startTimer();  // stats
@@ -511,10 +434,13 @@ namespace IC3 {
           assert (!rv);
           endTimer(satTime);
         }
+        // core extraction needs DR encoding consideration
         for (LitVec::const_iterator i = latches.begin(); 
-             i != latches.end(); ++i)
-          if (fr.consecution->conflict.has(~model.primeLit(*i)))
+             i != latches.end(); ++i) {
+          DrLit neg_platch_dr {~model.primeLit(*i)};
+          if (neg_platch_dr.IsInFinalConflict(*(fr.consecution)))
             core->push_back(*i);
+        }
         if (!initiation(*core))
           *core = latches;
       }
@@ -663,7 +589,7 @@ namespace IC3 {
       for (LitVec::const_iterator i = cube.begin(); i != cube.end(); ++i)
         cls.push(~*i);
       for (size_t i = toAll ? 1 : level; i <= level; ++i)
-        frames[i].consecution->addClause(cls);
+        AddDrClause(cls, *(frames[i].consecution));
       if (toAll && !silent) updateLitOrder(cube, level);
     }
 
@@ -722,15 +648,20 @@ namespace IC3 {
       earliest = k+1;  // earliest frame with enlarged borderCubes
       while (true) {
         ++nQuery; startTimer();  // stats
-        bool rv = frontier.consecution->solve(model.primedError());
+        MSLitVec assumps;
+        assumps.capacity(1);
+        AssumeDrLit(model.primedError(), assumps);
+        bool rv = frontier.consecution->solve(assumps);
         endTimer(satTime);
         if (!rv) return true;
         curr_bad_input.clear();
-        for (VarVec::const_iterator i = model.beginInputs();
-             i != model.endInputs(); ++i) {
-          Minisat::lbool pval =
-            frontier.consecution->modelValue(model.primeVar(*i).var());
-          curr_bad_input.push_back(i->lit(pval == Minisat::l_False));
+        for (VarVec::const_iterator i = model.beginInputs(); 
+           i != model.endInputs(); ++i) {
+          DrLit lit_dr = getDrModel(model.primeVar(*i), *(frontier.consecution));
+          if (!lit_dr.IsDontCare()) {
+            Minisat::Lit pi = lit_dr.GetLitIfDef();
+            curr_bad_input.push_back(pi);  // record full inputs
+          }
         }
         // handle CTI with error successor
         ++nCTI;  // stats
@@ -749,13 +680,13 @@ namespace IC3 {
     CertOpt certopt;
     // Certify the proof externally
     void Certify(size_t invar_idx) {
+      if (certopt.proof_cert_path == nullptr) {
+        certopt.proof_cert_path = "./certificate.aag";
+      } 
+      Certificate cert{model, frames, invar_idx, certopt.proof_cert_path};
       if (verbose) {
         cout << "Printing certificate: " << certopt.proof_cert_path << endl;
       }
-      if (certopt.proof_cert_path == nullptr) {
-        Certificate cert{model, frames, invar_idx, "./certificate.aag"};
-      }
-      Certificate cert{model, frames, invar_idx, certopt.proof_cert_path};
       cert.PrintCertificate();
     }
 
@@ -817,7 +748,6 @@ namespace IC3 {
       // 3. simplify frames
       for (size_t i = trivial ? k : 1; i <= k+1; ++i)
         frames[i].consecution->simplify();
-      lifts->simplify();
       return false;
     }
 

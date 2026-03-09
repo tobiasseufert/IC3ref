@@ -108,15 +108,6 @@ Minisat::Solver * Model::newDrSolver() const {
       throw runtime_error("Variable alignment in solvers broken.");
     }
   }
-  for (size_t i = 1; i < vars.size(); ++i) { // ignore constants
-    const Var& curr_var = vars[i];
-#ifndef NDEBUG    
-    Minisat::Var dual_rail_correspondent = curr_var.var() + vars.back().var();
-#endif    
-    DrVar dr_var{curr_var.var()};
-    assert (dual_rail_correspondent == dr_var.GetCorres());
-    dr_var.AddOneOneExclusionCl(*slv);
-  }
   return slv;
 }
 
@@ -293,6 +284,16 @@ void Model::initSimpDrContext() {
       FreezeDrVar(v.var(), *sslv_dr);
       FreezeDrVar(primeVar(v).var(), *sslv_dr);
     }
+    // dual-rail (1,1) encoding forbidden
+    for (size_t i = 1; i < vars.size(); ++i) { // ignore constants
+      const Var& curr_var = vars[i];
+#ifndef NDEBUG    
+      Minisat::Var dual_rail_correspondent = curr_var.var() + vars.back().var();
+#endif    
+      DrVar dr_var{curr_var.var()};
+      assert (dual_rail_correspondent == dr_var.GetCorres());
+      dr_var.AddOneOneExclusionCl(*sslv_dr);
+    }
     // initialize with roots of required formulas
     LitSet require;  // unprimed formulas
     for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i)
@@ -349,8 +350,6 @@ void Model::loadDrTransitionRelation(Minisat::Solver & slv, bool primeConstraint
   if (slv.nVars() < sslv_dr->nVars()) {
     throw runtime_error{"Something off with dual rail variable alignment."};
   }
-  // load the clauses from the simplified context
-  while (slv.nVars() < sslv_dr->nVars()) slv.newVar();
   for (Minisat::ClauseIterator c = sslv_dr->clausesBegin(); 
        c != sslv_dr->clausesEnd(); ++c) {
     const Minisat::Clause & cls = *c;
@@ -365,7 +364,7 @@ void Model::loadDrTransitionRelation(Minisat::Solver & slv, bool primeConstraint
   if (primeConstraints)
     for (LitVec::const_iterator i = constraints.begin(); 
          i != constraints.end(); ++i)
-      slv.addClause(primeLit(*i));
+      AddDrClause(primeLit(*i), slv);
 }
 
 void Model::loadInitialCondition(Minisat::Solver & slv) const {
@@ -414,12 +413,27 @@ void Model::loadInitialCondition(Minisat::Solver & slv) const {
     ~(in1, in2) = (in2, in1)
 */
 void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime) {
-  DrLit lhs{prime? primeLit(and_gate.lhs) : and_gate.lhs}, 
-        rhs0{prime? primeLit(and_gate.rhs0) : and_gate.rhs0}, 
-        rhs1{prime? primeLit(and_gate.rhs1) : and_gate.rhs1};
+  Minisat::Lit lhs, rhs0, rhs1;
+  lhs = prime? primeLit(and_gate.lhs) : and_gate.lhs;
+  rhs0 = prime? primeLit(and_gate.rhs0) : and_gate.rhs0;
+  rhs1 = prime? primeLit(and_gate.rhs1) : and_gate.rhs1;
+    
+  DrLit lhs_dr{Minisat::var(lhs)}, 
+        rhs0_dr{Minisat::var(rhs0)}, 
+        rhs1_dr{Minisat::var(rhs1)};
   
-  loadAndTseitin(slv, {~(lhs.Zero()), ~(rhs0.Zero()), ~(rhs1.Zero())}); // OR of zeros
-  loadAndTseitin(slv, {lhs.One(), rhs0.One(), rhs1.One()}); // AND of ones
+  Minisat::Lit rhs0_0, rhs1_0;
+  Minisat::Lit rhs0_1, rhs1_1;
+
+  assert (!Minisat::sign(and_gate.lhs)); // by AIGER design
+  rhs0_0 = Minisat::sign(and_gate.rhs0)? rhs0_dr.One(): rhs0_dr.Zero();
+  rhs0_1 = Minisat::sign(and_gate.rhs0)? rhs0_dr.Zero(): rhs0_dr.One();
+
+  rhs1_0 = Minisat::sign(and_gate.rhs1)? rhs1_dr.One(): rhs1_dr.Zero();
+  rhs1_1 = Minisat::sign(and_gate.rhs1)? rhs1_dr.Zero(): rhs1_dr.One();
+  
+  loadAndTseitin(slv, {~(lhs_dr.Zero()), ~(rhs0_0), ~(rhs1_0)}); // OR of zeros
+  loadAndTseitin(slv, {lhs_dr.One(), rhs0_1, rhs1_1}); // AND of ones
 }
 
 void Model::loadAndTseitin(Minisat::Solver& slv, AigRow&& and_gate) const {
@@ -628,6 +642,9 @@ DrLit::DrLit(const DrVar& var, bool t_f_sign)
 }
 DrLit::DrLit(Minisat::Lit std_lit) : DrLit(DrVar{Minisat::var(std_lit)}, Minisat::sign(std_lit)) {
   assert (std_lit.x > 1);
+}
+DrLit::DrLit(Minisat::Var std_var) : DrLit(DrVar{std_var}, false) {
+  assert (std_var > 0);
 }
 
 bool DrLit::IsDontCare() const {

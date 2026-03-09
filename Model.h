@@ -91,6 +91,7 @@ public:
   DrLit(const DrVar& var, DrSign sign);
   DrLit(const DrVar& var, bool t_f_sign);
   DrLit(Minisat::Lit std_lit);
+  DrLit(Minisat::Var std_var);
   bool IsDontCare() const;
   bool IsInFinalConflict(Minisat::Solver& slv) const;
   Minisat::Lit GetLitIfDef() const;

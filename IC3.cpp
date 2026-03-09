@@ -754,8 +754,8 @@ namespace IC3 {
         cout << "Printing certificate: " << certopt.proof_cert_path << endl;
       }
       if (certopt.proof_cert_path == nullptr) {
-        Certificate cert{model, frames, invar_idx, "./certificate.aag"};
-      }
+        certopt.proof_cert_path = "./certificate.aag";
+      } 
       Certificate cert{model, frames, invar_idx, certopt.proof_cert_path};
       cert.PrintCertificate();
     }

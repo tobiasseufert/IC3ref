@@ -750,13 +750,13 @@ namespace IC3 {
     CertOpt certopt;
     // Certify the proof externally
     void Certify(size_t invar_idx) {
-      if (verbose) {
-        cout << "Printing certificate: " << certopt.proof_cert_path << endl;
-      }
       if (certopt.proof_cert_path == nullptr) {
         certopt.proof_cert_path = "./certificate.aag";
       } 
       Certificate cert{model, frames, invar_idx, certopt.proof_cert_path};
+      if (verbose) {
+        cout << "Printing certificate: " << certopt.proof_cert_path << endl;
+      }
       cert.PrintCertificate();
     }
 

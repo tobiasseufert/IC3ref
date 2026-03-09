@@ -275,6 +275,8 @@ public:
   void loadTransitionRelation(Minisat::Solver & slv);
   void loadDrTransitionRelation(Minisat::Solver & slv, 
                               bool primeConstraints = true);
+  void loadTransitionRelationLifting(Minisat::Solver & slv, 
+                              bool primeConstraints = true);
   // Loads the initial condition into the solver.
   void loadInitialCondition(Minisat::Solver & slv) const;
   void loadDrInitialCondition(Minisat::Solver & slv);
@@ -290,6 +292,11 @@ public:
   const LitVec& getInitLits() const;
   size_t getMaxVar() const;
   size_t getAigMaxVar() const;
+
+  bool isInput(Minisat::Var v) const {
+    assert (v >= 0);
+    return (v > 0 && static_cast<size_t>(v) < latches);
+  }
 
 private:
   VarVec vars;

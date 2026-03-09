@@ -126,11 +126,33 @@ namespace IC3 {
       nmic(0), satTime(0), nCoreReduced(0), nAbortJoin(0), nAbortMic(0)
     {
       slimLitOrder.heuristicLitOrder = &litOrder;
+
+      // construct lifting solver
+      lifts = model.newSolver();
+      // don't assert primed invariant constraints
+      model.loadTransitionRelationLifting(*lifts, false);
+      // assert notInvConstraints (in stateOf) when lifting
+      notInvConstraints = Minisat::mkLit(lifts->newVar());
+      Minisat::vec<Minisat::Lit> cls;
+      cls.push(~notInvConstraints);
+      for (LitVec::const_iterator i = model.invariantConstraints().begin();
+           i != model.invariantConstraints().end(); ++i)
+        cls.push(model.primeLit(~*i));
+      lifts->addClause_(cls);
+      cls.clear();
+      notUnprimedInvConstraints = Minisat::mkLit(lifts->newVar());
+      cls.push(~notUnprimedInvConstraints);
+      for (LitVec::const_iterator i =
+          model.invariantConstraints().begin();
+          i != model.invariantConstraints().end(); ++i)
+        cls.push(~*i);
+      lifts->addClause_(cls);
     }
     ~IC3() {
       for (vector<Frame>::const_iterator i = frames.begin(); 
            i != frames.end(); ++i)
         if (i->consecution) delete i->consecution;
+      delete lifts;
     }
 
     // The main loop.
@@ -272,6 +294,7 @@ namespace IC3 {
 
     vector<Frame> frames;
 
+    Minisat::Solver * lifts;
     Minisat::Lit notInvConstraints;
     Minisat::Lit notUnprimedInvConstraints;
 
@@ -375,6 +398,7 @@ namespace IC3 {
           state(st).latches.push_back(la);
         }
       }
+      
 #ifndef NDEBUG
       float newi = state(st).inputs.size();
       float alli = (model.endInputs() - model.beginInputs());
@@ -756,6 +780,7 @@ namespace IC3 {
       // 3. simplify frames
       for (size_t i = trivial ? k : 1; i <= k+1; ++i)
         frames[i].consecution->simplify();
+      lifts->simplify();
       return false;
     }
 

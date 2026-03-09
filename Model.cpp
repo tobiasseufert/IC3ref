@@ -91,9 +91,19 @@ Minisat::Solver * Model::newDrSolver() const {
   }
   Minisat::Solver * slv = new Minisat::Solver();
   // load all variables to maintain alignment
-  for (size_t i = 0; i < vars.size(); ++i) {
-    slv->newVar();
-    Minisat::Var nv_dual = slv->newVar();
+  // ask the solver to decide (0,0) by default (except for inputs)
+  slv->newVar(); // constant 0/1
+  for (size_t i = 1; i < vars.size(); ++i) {
+    if (isInput(2 * i - 1)) // FIXME: hacky
+      slv->newVar(Minisat::l_False); // preferrably do not lift inputs
+    else
+      slv->newVar(Minisat::l_True); // True equals to 0 ... Minisat interface issue there, but ok.
+    Minisat::Var nv_dual;
+    if (isInput(2 * i))
+      nv_dual = slv->newVar(Minisat::l_False);
+    else 
+      nv_dual = slv->newVar(Minisat::l_True);
+
     if ((nv_dual / 2) != vars[i].var()) {
       throw runtime_error("Variable alignment in solvers broken.");
     }
@@ -258,7 +268,7 @@ void Model::loadDrTransitionRelation(Minisat::Solver & slv, bool primeConstraint
   assert (!primesUnlocked); // guarantee that the size of vars won't change anymore
   initSimplifiedContext();
   // load the clauses from the simplified context
-  if (slv.nVars() < sslv->nVars() * 2) {
+  if (slv.nVars() + 1 < sslv->nVars() * 2) {
     throw runtime_error{"Something off with dual rail variable alignment."};
   }
   for (Minisat::ClauseIterator c = sslv->clausesBegin(); 
@@ -273,6 +283,28 @@ void Model::loadDrTransitionRelation(Minisat::Solver & slv, bool primeConstraint
     for (LitVec::const_iterator i = constraints.begin(); 
          i != constraints.end(); ++i)
       AddDrClause(primeLit(*i), slv);
+}
+
+void Model::loadTransitionRelationLifting(Minisat::Solver & slv, bool primeConstraints) {
+  // load the clauses from the simplified context (it is checked internally whether it is 
+  // necessary to rebuild the simplified context)
+  initSimplifiedContext();
+  while (slv.nVars() < sslv->nVars()) slv.newVar();
+  for (Minisat::ClauseIterator c = sslv->clausesBegin(); 
+       c != sslv->clausesEnd(); ++c) {
+    const Minisat::Clause & cls = *c;
+    Minisat::vec<Minisat::Lit> cls_;
+    for (int i = 0; i < cls.size(); ++i)
+      cls_.push(cls[i]);
+    slv.addClause_(cls_);
+  }
+  for (Minisat::TrailIterator c = sslv->trailBegin(); 
+       c != sslv->trailEnd(); ++c)
+    slv.addClause(*c);
+  if (primeConstraints)
+    for (LitVec::const_iterator i = constraints.begin(); 
+         i != constraints.end(); ++i)
+      slv.addClause(primeLit(*i));
 }
 
 void Model::loadInitialCondition(Minisat::Solver & slv) const {

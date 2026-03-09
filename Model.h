@@ -94,6 +94,16 @@ public:
   bool IsDontCare() const;
   bool IsInFinalConflict(Minisat::Solver& slv) const;
   Minisat::Lit GetLitIfDef() const;
+  Minisat::Lit Zero() const { return zero; }
+  Minisat::Lit One() const { return one; }
+
+  const DrLit& operator~() {
+    Minisat::Lit old_zero = this->zero;
+    Minisat::Lit old_one = this->one;
+    this->zero = Minisat::mkLit(Minisat::var(old_zero), Minisat::sign(old_one));
+    this->one = Minisat::mkLit(Minisat::var(old_one), Minisat::sign(old_zero));
+    return *this;
+  }
 private:
   Minisat::Lit zero;
   Minisat::Lit one;
@@ -166,7 +176,7 @@ public:
     inputs(_inputs), latches(_latches), reps(_reps),
     primes(_vars.size()), primesUnlocked(true), aig(_aig),
     init(_init), constraints(_constraints), nextStateFns(_nextStateFns),
-    _error(_err), inits(NULL), sslv(NULL)
+    _error(_err), inits(NULL), sslv(NULL), sslv_dr(NULL)
   {
     // create primed inputs and latches in known region of vars
     for (size_t i = inputs; i < reps; ++i) {
@@ -275,8 +285,6 @@ public:
   void loadTransitionRelation(Minisat::Solver & slv);
   void loadDrTransitionRelation(Minisat::Solver & slv, 
                               bool primeConstraints = true);
-  void loadTransitionRelationLifting(Minisat::Solver & slv, 
-                              bool primeConstraints = true);
   // Loads the initial condition into the solver.
   void loadInitialCondition(Minisat::Solver & slv) const;
   void loadDrInitialCondition(Minisat::Solver & slv);
@@ -320,10 +328,13 @@ private:
   LitSet initLits;
 
   Minisat::SimpSolver * sslv;
+  Minisat::SimpSolver * sslv_dr;
 
   void loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime = false);
+  void loadAndTseitin(Minisat::Solver& slv, AigRow&& and_gate) const;
   void addVar(const Var& v);
   void initSimplifiedContext();
+  void initSimpDrContext();
 
 };
 

@@ -263,43 +263,104 @@ void Model::initSimplifiedContext() {
   }
 }
 
+void Model::initSimpDrContext() {
+  if (!sslv_dr) {
+    // create a simplified CNF version of (this slice of) the TR
+    sslv_dr = new Minisat::SimpSolver();
+    // introduce all variables to maintain alignment
+    sslv_dr->newVar();
+    for (size_t i = 1; i < vars.size(); ++i) {
+      sslv_dr->newVar();
+      Minisat::Var nv_dual = sslv_dr->newVar();      
+      if ((nv_dual / 2) != vars[i].var()) {
+        throw runtime_error("Variable alignment in solvers broken.");
+      }
+    }
+    // freeze inputs, latches, and special nodes (and primed forms)
+    for (VarVec::const_iterator i = beginInputs(); i != endInputs(); ++i) {
+      FreezeDrVar(i->var(), *sslv_dr);
+      FreezeDrVar(primeVar(*i).var(), *sslv_dr);
+    }
+    for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
+      FreezeDrVar(i->var(), *sslv_dr);
+      FreezeDrVar(primeVar(*i).var(), *sslv_dr);
+    }
+    FreezeDrVar(varOfLit(error()).var(), *sslv_dr);
+    FreezeDrVar(varOfLit(primedError()).var(), *sslv_dr);
+    for (LitVec::const_iterator i = constraints.begin(); 
+         i != constraints.end(); ++i) {
+      Var v = varOfLit(*i);
+      FreezeDrVar(v.var(), *sslv_dr);
+      FreezeDrVar(primeVar(v).var(), *sslv_dr);
+    }
+    // initialize with roots of required formulas
+    LitSet require;  // unprimed formulas
+    for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i)
+      require.insert(nextStateFn(*i));
+    require.insert(_error);
+    require.insert(constraints.begin(), constraints.end());
+    LitSet prequire; // for primed formulas; always subset of require
+    prequire.insert(_error);
+    prequire.insert(constraints.begin(), constraints.end());
+    // traverse AIG backward
+    for (AigVec::const_reverse_iterator i = aig.rbegin(); 
+         i != aig.rend(); ++i) {
+      // skip if this row is not required
+      if (require.find(i->lhs) == require.end() 
+          && require.find(~i->lhs) == require.end())
+        continue;
+      // encode into CNF
+      loadDrAndTseitin(*sslv_dr, *i);
+      // require arguments
+      require.insert(i->rhs0);
+      require.insert(i->rhs1);
+      // primed: skip if not required
+      if (prequire.find(i->lhs) == prequire.end()
+          && prequire.find(~i->lhs) == prequire.end())
+        continue;
+      // encode PRIMED form into CNF
+      loadDrAndTseitin(*sslv_dr, *i, true);
+      // require arguments
+      prequire.insert(i->rhs0);
+      prequire.insert(i->rhs1);
+    }
+    // assert literal for true
+    sslv_dr->addClause(btrue());
+    // assert ~error, constraints, and primed constraints
+    AddDrClause(~_error, *sslv_dr);
+    for (LitVec::const_iterator i = constraints.begin(); 
+         i != constraints.end(); ++i) {
+      AddDrClause(*i, *sslv_dr);
+    }
+    // assert l' = f for each latch l
+    for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
+      Minisat::Lit platch = primeLit(i->lit(false)), f = nextStateFn(*i);
+      AddDrClause(~platch, f, *sslv_dr);
+      AddDrClause(~f, platch, *sslv_dr);
+    }
+    sslv_dr->eliminate(true);
+  }
+}
 
 void Model::loadDrTransitionRelation(Minisat::Solver & slv, bool primeConstraints) {
   assert (!primesUnlocked); // guarantee that the size of vars won't change anymore
-  initSimplifiedContext();
+  initSimpDrContext();
   // load the clauses from the simplified context
-  if (slv.nVars() + 1 < sslv->nVars() * 2) {
+  if (slv.nVars() < sslv_dr->nVars()) {
     throw runtime_error{"Something off with dual rail variable alignment."};
   }
-  for (Minisat::ClauseIterator c = sslv->clausesBegin(); 
-       c != sslv->clausesEnd(); ++c) {
-    const Minisat::Clause & cls = *c;
-    AddDrClause(cls, slv);
-  }
-  for (Minisat::TrailIterator c = sslv->trailBegin(); 
-       c != sslv->trailEnd(); ++c)
-    AddDrClause(*c, slv);
-  if (primeConstraints)
-    for (LitVec::const_iterator i = constraints.begin(); 
-         i != constraints.end(); ++i)
-      AddDrClause(primeLit(*i), slv);
-}
-
-void Model::loadTransitionRelationLifting(Minisat::Solver & slv, bool primeConstraints) {
-  // load the clauses from the simplified context (it is checked internally whether it is 
-  // necessary to rebuild the simplified context)
-  initSimplifiedContext();
-  while (slv.nVars() < sslv->nVars()) slv.newVar();
-  for (Minisat::ClauseIterator c = sslv->clausesBegin(); 
-       c != sslv->clausesEnd(); ++c) {
+  // load the clauses from the simplified context
+  while (slv.nVars() < sslv_dr->nVars()) slv.newVar();
+  for (Minisat::ClauseIterator c = sslv_dr->clausesBegin(); 
+       c != sslv_dr->clausesEnd(); ++c) {
     const Minisat::Clause & cls = *c;
     Minisat::vec<Minisat::Lit> cls_;
     for (int i = 0; i < cls.size(); ++i)
       cls_.push(cls[i]);
     slv.addClause_(cls_);
   }
-  for (Minisat::TrailIterator c = sslv->trailBegin(); 
-       c != sslv->trailEnd(); ++c)
+  for (Minisat::TrailIterator c = sslv_dr->trailBegin(); 
+       c != sslv_dr->trailEnd(); ++c)
     slv.addClause(*c);
   if (primeConstraints)
     for (LitVec::const_iterator i = constraints.begin(); 
@@ -334,7 +395,40 @@ void Model::loadInitialCondition(Minisat::Solver & slv) const {
     slv.addClause(*i);
 }
 
+/* Implementation of 01X-AND:
+    in1   in2   out
+    0 0   0 0   0 0   X & X = X
+    0 0   0 1   0 0
+    0 0   1 0   1 0
+    ---------------
+    0 1   0 0   0 0   1 & X = X
+    0 1   0 1   0 1
+    0 1   1 0   1 0
+    ---------------
+    1 0   0 0   1 0   0 & X = 0
+    1 0   0 1   1 0
+    1 0   1 0   1 0
+*/
+
+/* Implementation of 01X-NOT:
+    ~(in1, in2) = (in2, in1)
+*/
 void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime) {
+  DrLit lhs{prime? primeLit(and_gate.lhs) : and_gate.lhs}, 
+        rhs0{prime? primeLit(and_gate.rhs0) : and_gate.rhs0}, 
+        rhs1{prime? primeLit(and_gate.rhs1) : and_gate.rhs1};
+  
+  loadAndTseitin(slv, {~(lhs.Zero()), ~(rhs0.Zero()), ~(rhs1.Zero())}); // OR of zeros
+  loadAndTseitin(slv, {lhs.One(), rhs0.One(), rhs1.One()}); // AND of ones
+}
+
+void Model::loadAndTseitin(Minisat::Solver& slv, AigRow&& and_gate) const {
+  slv.addClause(~and_gate.lhs, and_gate.rhs0);
+  slv.addClause(~and_gate.lhs, and_gate.rhs1);
+  slv.addClause(~and_gate.rhs0, ~and_gate.rhs1, and_gate.lhs);
+}
+
+/*void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime) {
   Minisat::Lit lhs, rhs0, rhs1;
   lhs = prime? primeLit(and_gate.lhs, &slv) : and_gate.lhs;
   rhs0 = prime? primeLit(and_gate.rhs0, &slv) : and_gate.rhs0;
@@ -342,7 +436,7 @@ void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool 
   AddDrClause(~lhs, rhs0, slv);
   AddDrClause(~lhs, rhs1, slv);
   AddDrClause(~rhs0, ~rhs1, lhs, slv);
-}
+}*/
 
 void Model::loadDrInitialCondition(Minisat::Solver & slv) {
   assert (!primesUnlocked);

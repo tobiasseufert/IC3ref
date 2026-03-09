@@ -394,14 +394,13 @@ namespace IC3 {
            i != model.endInputs(); ++i) {
         DrLit lit_dr = getDrModel(*i, *(fr.consecution));
         DrLit lit_dr_p = getDrModel(model.primeVar(*i), *(fr.consecution));
-        assert (!lit_dr.IsDontCare()); {
-          Minisat::Lit pi = lit_dr.GetLitIfDef();
-          Minisat::Lit pi_p = lit_dr_p.GetLitIfDef();
-          state(st).inputs.push_back(pi);  // record full inputs
-          inputs.push_back(pi);
-          AssumeDrLit(pi_p, assumps);
-          AssumeDrLit(pi, assumps);
-        }
+        // don't care inputs will be filled with zeros
+        Minisat::Lit pi = lit_dr.GetLitIfDef();
+        Minisat::Lit pi_p = lit_dr_p.GetLitIfDef();
+        state(st).inputs.push_back(pi);  // record full inputs
+        inputs.push_back(pi);
+        AssumeDrLit(pi_p, assumps);
+        AssumeDrLit(pi, assumps);
       }
       // extract latches
       for (VarVec::const_iterator i = model.beginLatches(); 
@@ -427,7 +426,9 @@ namespace IC3 {
           AddDrLitToCl(model.primeLit(~*i), cls);
         lifts->addClause_(cls);
       }
+      ++nQuery; startTimer();  // stats
       bool rv = lifts->solve(assumps);
+      endTimer(satTime);
       if(rv) {
         throw runtime_error{"Lifting failed. Perhaps invariant constraints or non-determinism issues?"};
       }
@@ -437,15 +438,6 @@ namespace IC3 {
         if (neg_latch_dr.IsInFinalConflict(*(lifts)))
           state(st).latches.push_back(*i);
       }
-
-#ifndef NDEBUG
-      float newi = state(st).inputs.size();
-      float alli = (model.endInputs() - model.beginInputs());
-      cout << "Reduced inp to " << (newi / alli) << " of all inps." << endl;
-      float news = state(st).latches.size();
-      float all = (model.endLatches() - model.beginLatches());
-      cout << "Reduced POB to " << (news / all) << " of all latches." << endl;
-#endif 
       
       return st;
     }

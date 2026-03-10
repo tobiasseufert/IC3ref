@@ -133,13 +133,12 @@ namespace IC3 {
       model.loadDrTransitionRelation(*lifts, false);
       // assert notInvConstraints (in stateOf) when lifting
       assert (model.invariantConstraints().empty());
-      /*
       notInvConstraints = Minisat::mkLit(lifts->newVar());
       Minisat::vec<Minisat::Lit> cls;
       cls.push(~notInvConstraints);
       for (LitVec::const_iterator i = model.invariantConstraints().begin();
            i != model.invariantConstraints().end(); ++i)
-        cls.push(model.primeLit(~*i));
+        AddDrLitToCl(model.primeLit(~*i), cls);
       lifts->addClause_(cls);
       cls.clear();
       notUnprimedInvConstraints = Minisat::mkLit(lifts->newVar());
@@ -147,8 +146,8 @@ namespace IC3 {
       for (LitVec::const_iterator i =
           model.invariantConstraints().begin();
           i != model.invariantConstraints().end(); ++i)
-        cls.push(~*i);
-      lifts->addClause_(cls);*/
+        AddDrLitToCl(~*i, cls);
+      lifts->addClause_(cls);
     }
     ~IC3() {
       for (vector<Frame>::const_iterator i = frames.begin(); 
@@ -414,20 +413,20 @@ namespace IC3 {
           AssumeDrLit(la, assumps);
         }
       }
+      Minisat::Lit act = Minisat::mkLit(lifts->newVar());  // activation literal
+      assumps.push(act);
+      Minisat::vec<Minisat::Lit> cls;
+      cls.push(~act);
+      cls.push(notInvConstraints);  // successor must satisfy inv. constraint
+      cls.push(notUnprimedInvConstraints);  // predecessor must satisfy inv. constraint
       if (succ == 0)
-        AssumeDrLit(~model.primedError(), assumps);
+        AddDrLitToCl(~model.primedError(), cls);
       else {
-        Minisat::Lit act = Minisat::mkLit(lifts->newVar());  // activation literal
-        assumps.push(act);
-        Minisat::vec<Minisat::Lit> cls;
-        cls.push(~act);
-        //cls.push(notInvConstraints);  // successor must satisfy inv. constraint
-        //cls.push(notUnprimedInvConstraints);  // predecessor must satisfy inv. constraint
         for (LitVec::const_iterator i = state(succ).latches.begin(); 
             i != state(succ).latches.end(); ++i)
           AddDrLitToCl(model.primeLit(~*i), cls);
-        lifts->addClause_(cls);
       }
+      lifts->addClause_(cls);
       ++nQuery; startTimer();  // stats
       bool rv = lifts->solve(assumps);
       endTimer(satTime);

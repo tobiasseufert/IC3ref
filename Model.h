@@ -285,7 +285,7 @@ public:
   // !primeConstraints.
   void loadTransitionRelation(Minisat::Solver & slv);
   void loadDrTransitionRelation(Minisat::Solver & slv, 
-                              bool primeConstraints = true);
+                              bool withConstraints = true);
   // Loads the initial condition into the solver.
   void loadInitialCondition(Minisat::Solver & slv) const;
   void loadDrInitialCondition(Minisat::Solver & slv);

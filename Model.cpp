@@ -329,12 +329,8 @@ void Model::initSimpDrContext() {
     }
     // assert literal for true
     sslv_dr->addClause(btrue());
-    // assert ~error, constraints, and primed constraints
+    // assert ~error
     AddDrClause(~_error, *sslv_dr);
-    for (LitVec::const_iterator i = constraints.begin(); 
-         i != constraints.end(); ++i) {
-      AddDrClause(*i, *sslv_dr);
-    }
     // assert l' = f for each latch l
     for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
       Minisat::Lit platch = primeLit(i->lit(false)), f = nextStateFn(*i);
@@ -410,7 +406,7 @@ void Model::AddDrEquivGateNoConst(Minisat::Solver& slv, Minisat::Lit equiv1, Min
   slv.addClause(equiv1_1, ~equiv2_1);
 }
 
-void Model::loadDrTransitionRelation(Minisat::Solver & slv, bool primeConstraints) {
+void Model::loadDrTransitionRelation(Minisat::Solver & slv, bool withConstraints) {
   assert (!primesUnlocked); // guarantee that the size of vars won't change anymore
   initSimpDrContext();
   // load the clauses from the simplified context
@@ -428,10 +424,12 @@ void Model::loadDrTransitionRelation(Minisat::Solver & slv, bool primeConstraint
   for (Minisat::TrailIterator c = sslv_dr->trailBegin(); 
        c != sslv_dr->trailEnd(); ++c)
     slv.addClause(*c);
-  if (primeConstraints)
+  if (withConstraints)
     for (LitVec::const_iterator i = constraints.begin(); 
-         i != constraints.end(); ++i)
+         i != constraints.end(); ++i) {
       AddDrClause(primeLit(*i), slv);
+      AddDrClause(*i, slv);
+    }
 }
 
 void Model::loadInitialCondition(Minisat::Solver & slv) const {
@@ -796,6 +794,7 @@ void DrVar::AddOneOneExclusionCl(Minisat::Solver& slv) {
 }
 
 void FreezeDrVar(Minisat::Var var, Minisat::SimpSolver& sslv) {
+  if (var == 0) return; // no need to freeze constant 0/1
   DrVar dr_var{var};
   sslv.setFrozen(dr_var.zero, true);
   sslv.setFrozen(dr_var.one, true);
@@ -824,6 +823,10 @@ void AssumeIndexedDrLit(Minisat::Lit lit, MSLitVec& assumps, int idx) {
 }
 // same logic as with assumptions
 void AddDrLitToCl(Minisat::Lit lit, MSLitVec& cl) {
+  if (Minisat::var(lit) == 0) { // constant, no dual rail encoding needed
+    cl.push(lit);
+    return;
+  }
   AssumeDrLit(lit, cl);
 }
 

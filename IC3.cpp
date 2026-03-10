@@ -132,7 +132,6 @@ namespace IC3 {
       // don't assert primed invariant constraints
       model.loadDrTransitionRelation(*lifts, false);
       // assert notInvConstraints (in stateOf) when lifting
-      assert (model.invariantConstraints().empty());
       notInvConstraints = Minisat::mkLit(lifts->newVar());
       Minisat::vec<Minisat::Lit> cls;
       cls.push(~notInvConstraints);
@@ -418,9 +417,10 @@ namespace IC3 {
       Minisat::vec<Minisat::Lit> cls;
       cls.push(~act);
       cls.push(notInvConstraints);  // successor must satisfy inv. constraint
-      cls.push(notUnprimedInvConstraints);  // predecessor must satisfy inv. constraint
-      if (succ == 0)
+      if (succ == 0) {
         AddDrLitToCl(~model.primedError(), cls);
+        cls.push(notUnprimedInvConstraints);  // predecessor must satisfy inv. constraint
+      }
       else {
         for (LitVec::const_iterator i = state(succ).latches.begin(); 
             i != state(succ).latches.end(); ++i)
@@ -440,12 +440,14 @@ namespace IC3 {
           state(st).latches.push_back(*i);
       }
 #ifndef NDEBUG
-      auto all_latches = (model.endLatches() - model.beginLatches());
-      auto all_inputs = (model.endInputs() - model.beginInputs());
-      float lat_frac = static_cast<float>(state(st).latches.size()) / static_cast<float>(all_latches);
-      float inp_frac = static_cast<float>(state(st).inputs.size()) / static_cast<float>(all_inputs);
-      cout << "latches reduced to " << lat_frac << endl;
-      cout << "inputs reduced to " << inp_frac << endl;
+      if (verbose > 1) {
+        auto all_latches = (model.endLatches() - model.beginLatches());
+        auto all_inputs = (model.endInputs() - model.beginInputs());
+        float lat_frac = static_cast<float>(state(st).latches.size()) / static_cast<float>(all_latches);
+        float inp_frac = static_cast<float>(state(st).inputs.size()) / static_cast<float>(all_inputs);
+        cout << "latches reduced to " << lat_frac << endl;
+        cout << "inputs reduced to " << inp_frac << endl;
+      }
 #endif
       
       return st;

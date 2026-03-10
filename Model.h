@@ -205,7 +205,7 @@ public:
   // form of the invariant constraints are not asserted if
   // !primeConstraints.
   void loadTransitionRelation(Minisat::Solver & slv, 
-                              bool primeConstraints = true);
+                              bool withConstraints = true);
   // Loads the initial condition into the solver.
   void loadInitialCondition(Minisat::Solver & slv) const;
   // Loads the error into the solver, which is only necessary for the

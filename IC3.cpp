@@ -402,10 +402,11 @@ namespace IC3 {
       assumps.push(act);
       Minisat::vec<Minisat::Lit> cls;
       cls.push(~act);
-      cls.push(notInvConstraints);  // successor must satisfy inv. constraint
       cls.push(notUnprimedInvConstraints);  // predecessor must satisfy inv. constraint
-      if (succ == 0)
+      if (succ == 0) {
         cls.push(~model.primedError());
+        cls.push(notInvConstraints);  // successor must satisfy inv. constraint
+      }
       else
         for (LitVec::const_iterator i = state(succ).latches.begin(); 
              i != state(succ).latches.end(); ++i)

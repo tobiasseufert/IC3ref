@@ -46,6 +46,8 @@ class Certificate {
       AddLatchToAiger(i);
     for (AigVec::const_iterator a = model.beginAnds(); a != model.endAnds(); ++a)
       AddAndToAiger(a);
+    for (const auto& constraint: model.invariantConstraints()) 
+      AddConstraintToAiger(constraint);
     BuildCertifaiger();
   }
 
@@ -107,6 +109,14 @@ class Certificate {
                   Minisat::toInt(a->lhs),
                   Minisat::toInt(a->rhs0),
                   Minisat::toInt(a->rhs1));
+  }
+
+  inline void AddConstraintToAiger(const Minisat::Lit& constraint) {
+    // Add constraint as an invariant constraint to the AIGER certificate
+    int lit = Minisat::toInt(constraint);
+    assert(lit > 0);
+    unsigned constraint_aiger = static_cast<unsigned>(lit);
+    aiger_add_constraint(aig, constraint_aiger, "invariant");
   }
 
   inline void RegisterAndOp(Minisat::Lit lhs) { cube_ands.push_back(lhs); }

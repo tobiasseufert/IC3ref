@@ -429,7 +429,21 @@ namespace IC3 {
           assumps.push(la);
         }
       }
-      orderAssumps(assumps, false, sz);  // empirically found to be best choice
+      Minisat::Lit act = Minisat::mkLit(lifts->newVar());  // activation literal
+      assumps.push(act);
+      Minisat::vec<Minisat::Lit> cls;
+      cls.push(~act);
+      cls.push(notUnprimedInvConstraints);  // successor must satisfy inv. constraint
+      if (succ == 0) {
+        AddDrLitToCl(~model.primedError(), cls);
+        cls.push(notInvConstraints);  // predecessor must satisfy inv. constraint
+      }
+      else {
+        for (LitVec::const_iterator i = state(succ).latches.begin(); 
+            i != state(succ).latches.end(); ++i)
+          AddDrLitToCl(model.primeLit(~*i), cls);
+      }
+      lifts->addClause_(cls);
       ++nQuery; startTimer();  // stats
       bool rv = lifts->solve(assumps);
       endTimer(satTime);

@@ -313,6 +313,7 @@ namespace IC3 {
         }
         if (fr.k == 0) model.loadDrInitialCondition(*fr.consecution);
         model.loadDrTransitionRelation(*fr.consecution);
+        assert (fr.consecution->solve());
       }
     }
 
@@ -408,6 +409,7 @@ namespace IC3 {
         DrLit lit_dr = getDrModel(*i, *(fr.consecution));
         if (!lit_dr.IsDontCare()) {
           Minisat::Lit la = lit_dr.GetLitIfDef();
+          //state(st).latches.push_back(la);
           latches.push_back(la);
           AssumeDrLit(la, assumps);
         }
@@ -438,6 +440,14 @@ namespace IC3 {
         if (neg_latch_dr.IsInFinalConflict(*(lifts)))
           state(st).latches.push_back(*i);
       }
+#ifndef NDEBUG
+      auto all_latches = (model.endLatches() - model.beginLatches());
+      auto all_inputs = (model.endInputs() - model.beginInputs());
+      float lat_frac = static_cast<float>(state(st).latches.size()) / static_cast<float>(all_latches);
+      float inp_frac = static_cast<float>(state(st).inputs.size()) / static_cast<float>(all_inputs);
+      cout << "latches reduced to " << lat_frac << endl;
+      cout << "inputs reduced to " << inp_frac << endl;
+#endif
       
       return st;
     }

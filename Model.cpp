@@ -94,14 +94,16 @@ Minisat::Solver * Model::newDrSolver() const {
   // ask the solver to decide (0,0) by default (except for inputs)
   slv->newVar(); // constant 0/1
   for (size_t i = 1; i < vars.size(); ++i) {
-    if (isInput(2 * i - 1)) // FIXME: hacky
-      slv->newVar(Minisat::l_False); // preferrably do not lift inputs
-    else
+    //if (isInput(2 * i - 1)) {// FIXME: hacky
+   //   Minisat::Var nv = slv->newVar(Minisat::l_False); // preferrably do not lift inputs
+   // }
+   // else
       slv->newVar(Minisat::l_True); // True equals to 0 ... Minisat interface issue there, but ok.
     Minisat::Var nv_dual;
-    if (isInput(2 * i))
-      nv_dual = slv->newVar(Minisat::l_False);
-    else 
+    //if (isInput(2 * i)) {
+    //  nv_dual = slv->newVar(Minisat::l_False);
+    //}
+    //else 
       nv_dual = slv->newVar(Minisat::l_True);
 
     if ((nv_dual / 2) != vars[i].var()) {
@@ -336,11 +338,76 @@ void Model::initSimpDrContext() {
     // assert l' = f for each latch l
     for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
       Minisat::Lit platch = primeLit(i->lit(false)), f = nextStateFn(*i);
-      AddDrClause(~platch, f, *sslv_dr);
-      AddDrClause(~f, platch, *sslv_dr);
+      AddDrEquivGate(*sslv_dr, platch, f);
     }
     sslv_dr->eliminate(true);
   }
+}
+
+void Model::AddDrEquivGate(Minisat::Solver& slv, Minisat::Lit equiv1, Minisat::Lit equiv2) const {
+  const bool equiv1_is_btrue = (equiv1 == btrue());
+  const bool equiv1_is_bfalse = (equiv1 == bfalse());
+  const bool equiv2_is_btrue = (equiv2 == btrue());
+  const bool equiv2_is_bfalse = (equiv2 == bfalse());
+
+  const bool equiv1_is_const = equiv1_is_btrue || equiv1_is_bfalse;
+  const bool equiv2_is_const = equiv2_is_btrue || equiv2_is_bfalse;
+
+  if (equiv1_is_const && equiv2_is_const) {
+    if (equiv1_is_btrue != equiv2_is_btrue)
+      slv.addEmptyClause();
+    return;
+  }
+
+  if (equiv1_is_const) {
+    if (equiv1_is_btrue)
+      AddDrClause(equiv2, slv);
+    else
+      AddDrClause(~equiv2, slv);
+    return;
+  }
+
+  if (equiv2_is_const) {
+    if (equiv2_is_btrue)
+      AddDrClause(equiv1, slv);
+    else
+      AddDrClause(~equiv1, slv);
+    return;
+  }
+
+  AddDrEquivGateNoConst(slv, equiv1, equiv2);
+}
+
+void Model::AddDrEquivGateNoConst(Minisat::Solver& slv, Minisat::Lit equiv1, Minisat::Lit equiv2) const {
+  DrLit equiv1_dr{Minisat::var(equiv1)}, 
+        equiv2_dr{Minisat::var(equiv2)};
+  
+  Minisat::Lit equiv1_0, equiv1_1;
+  Minisat::Lit equiv2_0, equiv2_1;
+
+  if (Minisat::sign(equiv1)) { // evaluate NOT
+    equiv1_0 = equiv1_dr.One();
+    equiv1_1 = equiv1_dr.Zero();
+  } else {
+    equiv1_0 = equiv1_dr.Zero();
+    equiv1_1 = equiv1_dr.One();
+  }
+  if (Minisat::sign(equiv2)) { // evaluate NOT
+    equiv2_0 = equiv2_dr.One();
+    equiv2_1 = equiv2_dr.Zero();
+  } else {
+    equiv2_0 = equiv2_dr.Zero();
+    equiv2_1 = equiv2_dr.One();
+  }
+
+  // add the clauses accordingly
+  // equiv1^(0) == equiv2^(0)
+  slv.addClause(~equiv1_0, equiv2_0);
+  slv.addClause(equiv1_0, ~equiv2_0);
+
+  // equiv1^(1) == equiv2^(1)
+  slv.addClause(~equiv1_1, equiv2_1);
+  slv.addClause(equiv1_1, ~equiv2_1);
 }
 
 void Model::loadDrTransitionRelation(Minisat::Solver & slv, bool primeConstraints) {
@@ -413,6 +480,42 @@ void Model::loadInitialCondition(Minisat::Solver & slv) const {
     ~(in1, in2) = (in2, in1)
 */
 void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime) {
+  Minisat::Lit rhs0 = prime? primeLit(and_gate.rhs0) : and_gate.rhs0;
+  Minisat::Lit rhs1 = prime? primeLit(and_gate.rhs1) : and_gate.rhs1;
+
+  const bool rhs0_is_btrue = (rhs0 == btrue());
+  const bool rhs0_is_bfalse = (rhs0 == bfalse());
+  const bool rhs1_is_btrue = (rhs1 == btrue());
+  const bool rhs1_is_bfalse = (rhs1 == bfalse());
+
+  const bool rhs0_is_const = rhs0_is_btrue || rhs0_is_bfalse;
+  const bool rhs1_is_const = rhs1_is_btrue || rhs1_is_bfalse;
+
+  if (!rhs0_is_const && !rhs1_is_const) {
+    loadDrAndTseitinNoConst(slv, and_gate, prime);
+    return;
+  }
+
+  Minisat::Lit lhs = prime? primeLit(and_gate.lhs) : and_gate.lhs;
+  assert (!Minisat::sign(lhs)); // by AIGER design
+
+  if (rhs0_is_bfalse || rhs1_is_bfalse) {
+    AddDrEquivGate(slv, lhs, bfalse());
+    return;
+  }
+  if (rhs0_is_btrue && rhs1_is_btrue) {
+    AddDrEquivGate(slv, lhs, btrue());
+    return;
+  }
+  if (rhs0_is_btrue) {
+    AddDrEquivGate(slv, lhs, rhs1);
+    return;
+  }
+
+  AddDrEquivGate(slv, lhs, rhs0);
+}
+
+void Model::loadDrAndTseitinNoConst(Minisat::Solver& slv, const AigRow& and_gate, bool prime) {
   Minisat::Lit lhs, rhs0, rhs1;
   lhs = prime? primeLit(and_gate.lhs) : and_gate.lhs;
   rhs0 = prime? primeLit(and_gate.rhs0) : and_gate.rhs0;
@@ -426,11 +529,20 @@ void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool 
   Minisat::Lit rhs0_1, rhs1_1;
 
   assert (!Minisat::sign(and_gate.lhs)); // by AIGER design
-  rhs0_0 = Minisat::sign(and_gate.rhs0)? rhs0_dr.One(): rhs0_dr.Zero();
-  rhs0_1 = Minisat::sign(and_gate.rhs0)? rhs0_dr.Zero(): rhs0_dr.One();
-
-  rhs1_0 = Minisat::sign(and_gate.rhs1)? rhs1_dr.One(): rhs1_dr.Zero();
-  rhs1_1 = Minisat::sign(and_gate.rhs1)? rhs1_dr.Zero(): rhs1_dr.One();
+  if (Minisat::sign(and_gate.rhs0)) { // evaluate NOT
+    rhs0_0 = rhs0_dr.One();
+    rhs0_1 = rhs0_dr.Zero();
+  } else {
+    rhs0_0 = rhs0_dr.Zero();
+    rhs0_1 = rhs0_dr.One();
+  }
+  if (Minisat::sign(and_gate.rhs1)) { // evaluate NOT
+    rhs1_0 = rhs1_dr.One();
+    rhs1_1 = rhs1_dr.Zero();
+  } else {
+    rhs1_0 = rhs1_dr.Zero();
+    rhs1_1 = rhs1_dr.One();
+  }
   
   loadAndTseitin(slv, {~(lhs_dr.Zero()), ~(rhs0_0), ~(rhs1_0)}); // OR of zeros
   loadAndTseitin(slv, {lhs_dr.One(), rhs0_1, rhs1_1}); // AND of ones
@@ -441,16 +553,6 @@ void Model::loadAndTseitin(Minisat::Solver& slv, AigRow&& and_gate) const {
   slv.addClause(~and_gate.lhs, and_gate.rhs1);
   slv.addClause(~and_gate.rhs0, ~and_gate.rhs1, and_gate.lhs);
 }
-
-/*void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime) {
-  Minisat::Lit lhs, rhs0, rhs1;
-  lhs = prime? primeLit(and_gate.lhs, &slv) : and_gate.lhs;
-  rhs0 = prime? primeLit(and_gate.rhs0, &slv) : and_gate.rhs0;
-  rhs1 = prime? primeLit(and_gate.rhs1, &slv) : and_gate.rhs1;
-  AddDrClause(~lhs, rhs0, slv);
-  AddDrClause(~lhs, rhs1, slv);
-  AddDrClause(~rhs0, ~rhs1, lhs, slv);
-}*/
 
 void Model::loadDrInitialCondition(Minisat::Solver & slv) {
   assert (!primesUnlocked);
@@ -643,8 +745,13 @@ DrLit::DrLit(const DrVar& var, bool t_f_sign)
 DrLit::DrLit(Minisat::Lit std_lit) : DrLit(DrVar{Minisat::var(std_lit)}, Minisat::sign(std_lit)) {
   assert (std_lit.x > 1);
 }
-DrLit::DrLit(Minisat::Var std_var) : DrLit(DrVar{std_var}, false) {
+DrLit::DrLit(Minisat::Var std_var) {
   assert (std_var > 0);
+  DrVar var_dr{std_var};
+  // initialized with forbidden (1,1), but this is used for general clause constraints
+  // over the zero/one literals
+  this->zero = Minisat::mkLit(var_dr.zero, false);
+  this->one = Minisat::mkLit(var_dr.one, false); 
 }
 
 bool DrLit::IsDontCare() const {
@@ -655,9 +762,9 @@ bool DrLit::IsDontCare() const {
   return false;
 }
 Minisat::Lit DrLit::GetLitIfDef() const {
-  // (1,1), (0,0) shall not arrive here, has to be defined 0/1
-  if (Minisat::sign(this->zero) == Minisat::sign(this->one)) {
-    throw runtime_error{"Tried to get a literal definition. But it is undefined."};
+  // (1,1), shall not arrive here, has to be defined 0/1, (0,0) just picks 0
+  if (!Minisat::sign(this->zero) && !Minisat::sign(this->one)) {
+    throw runtime_error{"Tried to get a literal definition. But it is forbidden (1,1)."};
   }
 
   // invariant: zero holds the original variable index (that is what we want to return here)
@@ -671,7 +778,7 @@ bool DrLit::IsInFinalConflict(Minisat::Solver& slv) const {
   }
   if (slv.conflict.has(this->one)) 
     return true;
-  if (slv.conflict.has(this->zero))
+  if (slv.conflict.has(this->zero)) 
     return true;
   return false;
 }
@@ -782,5 +889,5 @@ DrLit getDrModel(const Var& var, const Minisat::Solver& slv) {
   else if (!zero_val && !one_val) sign = DrSign::DC;
   else throw runtime_error{"Forbidden (1,1) assignment detected."};
   
-  return DrLit{var_dr, sign}; // shouldn't reach here
+  return DrLit{var_dr, sign}; 
 }

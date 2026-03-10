@@ -302,10 +302,10 @@ public:
   size_t getMaxVar() const;
   size_t getAigMaxVar() const;
 
-  bool isInput(Minisat::Var v) const {
-    assert (v >= 0);
+  bool isInput(int v) const {
+    if (v <= 0) return false;
     return ((v > 0 && static_cast<size_t>(v) < latches) ||
-            (static_cast<size_t>(v) >= primes && static_cast<size_t>(v) < (primes+latches)));
+            (static_cast<size_t>(v) >= primes && static_cast<size_t>(v) < (primes+latches-1)));
   }
 
 private:
@@ -332,7 +332,10 @@ private:
   Minisat::SimpSolver * sslv_dr;
 
   void loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime = false);
+  void loadDrAndTseitinNoConst(Minisat::Solver& slv, const AigRow& and_gate, bool prime = false);
   void loadAndTseitin(Minisat::Solver& slv, AigRow&& and_gate) const;
+  void AddDrEquivGate(Minisat::Solver& slv, Minisat::Lit equiv1, Minisat::Lit equiv2) const;
+  void AddDrEquivGateNoConst(Minisat::Solver& slv, Minisat::Lit equiv1, Minisat::Lit equiv2) const;
   void addVar(const Var& v);
   void initSimplifiedContext();
   void initSimpDrContext();

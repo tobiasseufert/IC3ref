@@ -221,7 +221,8 @@ void Model::initSimpDrContext() {
           && require.find(~i->lhs) == require.end())
         continue;
       // encode into CNF
-      loadDrAndTseitin(*sslv_dr, *i);
+      //loadDrAndTseitin(*sslv_dr, *i);
+      loadDrAndForgetful(*sslv_dr, *i);
       // require arguments
       require.insert(i->rhs0);
       require.insert(i->rhs1);
@@ -230,7 +231,8 @@ void Model::initSimpDrContext() {
           && prequire.find(~i->lhs) == prequire.end())
         continue;
       // encode PRIMED form into CNF
-      loadDrAndTseitin(*sslv_dr, *i, true);
+      //loadDrAndTseitin(*sslv_dr, *i, true);
+      loadDrAndForgetful(*sslv_dr, *i, true);
       // require arguments
       prequire.insert(i->rhs0);
       prequire.insert(i->rhs1);
@@ -419,6 +421,40 @@ void Model::loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool 
   }
 
   AddDrEquivGate(slv, lhs, rhs0);
+}
+
+void Model::loadDrAndForgetful(Minisat::Solver& slv, const AigRow& and_gate, bool prime) {
+  Minisat::Lit lhs, rhs0, rhs1;
+  lhs = prime? primeLit(and_gate.lhs) : and_gate.lhs;
+  rhs0 = prime? primeLit(and_gate.rhs0) : and_gate.rhs0;
+  rhs1 = prime? primeLit(and_gate.rhs1) : and_gate.rhs1;
+    
+  DrLit lhs_dr{Minisat::var(lhs)}, 
+        rhs0_dr{Minisat::var(rhs0)}, 
+        rhs1_dr{Minisat::var(rhs1)};
+  
+  Minisat::Lit rhs0_0, rhs1_0;
+  Minisat::Lit rhs0_1, rhs1_1;
+
+  assert (!Minisat::sign(and_gate.lhs)); // by AIGER design
+  if (Minisat::sign(and_gate.rhs0)) { // evaluate NOT
+    rhs0_0 = rhs0_dr.One();
+    rhs0_1 = rhs0_dr.Zero();
+  } else {
+    rhs0_0 = rhs0_dr.Zero();
+    rhs0_1 = rhs0_dr.One();
+  }
+  if (Minisat::sign(and_gate.rhs1)) { // evaluate NOT
+    rhs1_0 = rhs1_dr.One();
+    rhs1_1 = rhs1_dr.Zero();
+  } else {
+    rhs1_0 = rhs1_dr.Zero();
+    rhs1_1 = rhs1_dr.One();
+  }
+  
+  slv.addClause(rhs0_0, rhs1_0, ~(lhs_dr.Zero()));
+  slv.addClause(rhs1_1, ~(lhs_dr.One()));
+  slv.addClause(rhs0_1, ~(lhs_dr.One()));
 }
 
 void Model::loadDrAndTseitinNoConst(Minisat::Solver& slv, const AigRow& and_gate, bool prime) {
@@ -641,12 +677,12 @@ DrLit::DrLit(const DrVar& var, DrSign sign)
   case DrSign::DC:
     break;
   }
-  assert (one.x != zero.x);
+  assert (Minisat::sign(one) || Minisat::sign(zero));
 }
 DrLit::DrLit(const DrVar& var, bool t_f_sign)
   : zero(Minisat::mkLit(var.zero, !t_f_sign)), // sign -> 1
     one(Minisat::mkLit(var.one, t_f_sign)) {   // sign -> 0
-  assert (one.x != zero.x);
+  assert (Minisat::sign(one) || Minisat::sign(zero));
 }
 DrLit::DrLit(Minisat::Lit std_lit) : DrLit(DrVar{Minisat::var(std_lit)}, Minisat::sign(std_lit)) {
   assert (std_lit.x > 1);
@@ -659,6 +695,7 @@ DrLit::DrLit(Minisat::Var std_var) {
   this->zero = Minisat::mkLit(var_dr.zero, false);
   this->one = Minisat::mkLit(var_dr.one, false); 
 }
+DrLit::DrLit(Minisat::Var var, DrSign sign) : DrLit(DrVar{var}, sign) { }
 
 bool DrLit::IsDontCare() const {
   assert (Minisat::sign(this->zero) || Minisat::sign(this->one)); // (1,1) forbidden
@@ -717,6 +754,12 @@ void AssumeDrLit(Minisat::Lit lit, MSLitVec& assumps) {
   }
   if (!Minisat::sign(dr_lit.one)) // lit = 1
     assumps.push(dr_lit.one);
+}
+void AssumeDrLit(const DrLit& dr_lit, MSLitVec& assumps) {
+  // can be (0,0) = X
+  assert (Minisat::sign(dr_lit.one) || Minisat::sign(dr_lit.zero));
+  assumps.push(dr_lit.zero);
+  assumps.push(dr_lit.one);
 }
 void AssumeIndexedDrLit(Minisat::Lit lit, MSLitVec& assumps, int idx) {
   assert (idx < assumps.size());

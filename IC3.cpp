@@ -459,6 +459,27 @@ namespace IC3 {
       return !model.isInitial(latches);
     }
 
+
+    bool varIsLatch(const Var& var) {
+      return (var.var() >= model.beginLatches()->var() && 
+              var.var() < model.endLatches()->var());
+    }
+
+    bool varHasNextStateAnd(const Var& var) {
+      if (!varIsLatch(var))
+        throw runtime_error("Tried to access next state function of non state variable.");
+      auto next = model.nextStateFn(var);
+      return (Minisat::var(next) >= model.endLatches()->var());
+    }
+
+    void assumePrimedRestAsX(const LitVec& latches, MSLitVec& assumps) {
+      LitSet forced{latches.begin(), latches.end()};
+      for (VarVec::const_iterator it = model.beginLatches(); it != model.endLatches(); ++it) {
+        if (!forced.contains(it->lit(false)) && !forced.contains(it->lit(true)) && varHasNextStateAnd(*it))
+          AssumeDrLit(DrLit{model.primeVar(*it).var(), DrSign::DC}, assumps);
+      }
+    }
+
     // Check if ~latches is inductive relative to frame fi.  If it's
     // inductive and core is provided, extracts the unsat core.  If
     // it's not inductive and pred is provided, extracts
@@ -469,6 +490,8 @@ namespace IC3 {
     {
       Frame & fr = frames[fi];
       MSLitVec assumps, cls;
+      //auto total_latches = (model.endLatches() - model.beginLatches());
+      //assumps.capacity(1 + total_latches * 2);
       assumps.capacity(1 + latches.size());
       cls.capacity(1 + latches.size());
       Minisat::Lit act = Minisat::mkLit(fr.consecution->newVar());
@@ -490,6 +513,9 @@ namespace IC3 {
                             assumps, i);
       }
       fr.consecution->addClause_(cls);
+      // unasserted "latches" are forced to X
+      size_t oldsz = assumps.size();
+      //assumePrimedRestAsX(latches, assumps);
       // F_fi & ~latches & T & latches'
       ++nQuery; startTimer();  // stats
       bool rv = fr.consecution->solve(assumps);
@@ -504,7 +530,7 @@ namespace IC3 {
       if (core) {
         if (pred && orderedCore) {
           // redo with correctly ordered assumps
-          reverse(assumps+1, assumps+assumps.size());
+          reverse(assumps+1, assumps+oldsz);
           ++nQuery; startTimer();  // stats
           rv = fr.consecution->solve(assumps);
           assert (!rv);

@@ -89,6 +89,7 @@ class DrVar;
 class DrLit {
 public:
   DrLit(const DrVar& var, DrSign sign);
+  DrLit(Minisat::Var var, DrSign sign);
   DrLit(const DrVar& var, bool t_f_sign);
   DrLit(Minisat::Lit std_lit);
   DrLit(Minisat::Var std_var);
@@ -110,6 +111,7 @@ private:
   Minisat::Lit one;
 
   friend void AssumeDrLit(Minisat::Lit, MSLitVec&);
+  friend void AssumeDrLit(const DrLit&, MSLitVec&);
   friend void AssumeIndexedDrLit(Minisat::Lit, MSLitVec&, int);
   friend void AddDrClause(Minisat::Lit, Minisat::Solver&);
   friend void AddDrClause(Minisat::Lit, Minisat::Lit, Minisat::Solver&);
@@ -331,6 +333,7 @@ private:
   Minisat::SimpSolver * sslv;
   Minisat::SimpSolver * sslv_dr;
 
+  void loadDrAndForgetful(Minisat::Solver& slv, const AigRow& and_gate, bool prime = false);
   void loadDrAndTseitin(Minisat::Solver& slv, const AigRow& and_gate, bool prime = false);
   void loadDrAndTseitinNoConst(Minisat::Solver& slv, const AigRow& and_gate, bool prime = false);
   void loadAndTseitin(Minisat::Solver& slv, AigRow&& and_gate) const;

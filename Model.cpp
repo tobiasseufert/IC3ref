@@ -33,6 +33,7 @@ size_t DrVar::num_std_vars = 0;
 Model::~Model() {
   if (inits) delete inits;
   if (sslv) delete sslv;
+  if (sslv_dr) delete sslv_dr;
 }
 
 void Model::addVar(const Var & v) {
@@ -41,7 +42,7 @@ void Model::addVar(const Var & v) {
   DrVar::incVars();
 }
 
-const Var & Model::primeVar(const Var & v, Minisat::Solver * slv) {
+const Var & Model::primeVar(const Var & v, Minisat::SimpSolver * slv) {
   // var for false
   if (v.index() == 0) return v;
   // latch or PI
@@ -105,63 +106,103 @@ Minisat::Solver * Model::newDrSolver() const {
   return slv;
 }
 
-void Model::loadTransitionRelation(Minisat::Solver & slv) {
-  // initialize with roots of required formulas
-  LitSet require;  // unprimed formulas
-  for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i)
-    require.insert(nextStateFn(*i));
-  require.insert(_error);
-  require.insert(constraints.begin(), constraints.end());
-  LitSet prequire; // for primed formulas; always subset of require
-  prequire.insert(_error);
-  prequire.insert(constraints.begin(), constraints.end());
-  // traverse AIG backward
-  for (AigVec::const_reverse_iterator i = aig.rbegin(); 
-        i != aig.rend(); ++i) {
-    // skip if this row is not required
-    if (require.find(i->lhs) == require.end() 
-        && require.find(~i->lhs) == require.end())
-      continue;
-    // encode into CNF
-    slv.addClause(~i->lhs, i->rhs0);
-    slv.addClause(~i->lhs, i->rhs1);
-    slv.addClause(~i->rhs0, ~i->rhs1, i->lhs);
-    // require arguments
-    require.insert(i->rhs0);
-    require.insert(i->rhs1);
-    // primed: skip if not required
-    if (prequire.find(i->lhs) == prequire.end()
-        && prequire.find(~i->lhs) == prequire.end())
-      continue;
-    // encode PRIMED form into CNF
-    Minisat::Lit r0 = primeLit(i->lhs, &slv), 
-      r1 = primeLit(i->rhs0, &slv), 
-      r2 = primeLit(i->rhs1, &slv);
-    slv.addClause(~r0, r1);
-    slv.addClause(~r0, r2);
-    slv.addClause(~r1, ~r2, r0);
-    // require arguments
-    prequire.insert(i->rhs0);
-    prequire.insert(i->rhs1);
+void Model::loadTransitionRelation(Minisat::Solver & slv, bool withConstraints) {
+  if (!sslv) {
+    // create a simplified CNF version of (this slice of) the TR
+    sslv = new Minisat::SimpSolver();
+    // introduce all variables to maintain alignment
+    for (size_t i = 0; i < vars.size(); ++i) {
+      Minisat::Var nv = sslv->newVar();      
+      if (nv != vars[i].var()) {
+        throw runtime_error("Variable alignment in solvers broken.");
+      }
+    }
+    // freeze inputs, latches, and special nodes (and primed forms)
+    for (VarVec::const_iterator i = beginInputs(); i != endInputs(); ++i) {
+      sslv->setFrozen(i->var(), true);
+      sslv->setFrozen(primeVar(*i).var(), true);
+    }
+    for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
+      sslv->setFrozen(i->var(), true);
+      sslv->setFrozen(primeVar(*i).var(), true);
+    }
+    sslv->setFrozen(varOfLit(error()).var(), true);
+    sslv->setFrozen(varOfLit(primedError()).var(), true);
+    for (LitVec::const_iterator i = constraints.begin(); 
+         i != constraints.end(); ++i) {
+      Var v = varOfLit(*i);
+      sslv->setFrozen(v.var(), true);
+      sslv->setFrozen(primeVar(v).var(), true);
+    }
+    // initialize with roots of required formulas
+    LitSet require;  // unprimed formulas
+    for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i)
+      require.insert(nextStateFn(*i));
+    require.insert(_error);
+    require.insert(constraints.begin(), constraints.end());
+    LitSet prequire; // for primed formulas; always subset of require
+    prequire.insert(_error);
+    prequire.insert(constraints.begin(), constraints.end());
+    // traverse AIG backward
+    for (AigVec::const_reverse_iterator i = aig.rbegin(); 
+         i != aig.rend(); ++i) {
+      // skip if this row is not required
+      if (require.find(i->lhs) == require.end() 
+          && require.find(~i->lhs) == require.end())
+        continue;
+      // encode into CNF
+      sslv->addClause(~i->lhs, i->rhs0);
+      sslv->addClause(~i->lhs, i->rhs1);
+      sslv->addClause(~i->rhs0, ~i->rhs1, i->lhs);
+      // require arguments
+      require.insert(i->rhs0);
+      require.insert(i->rhs1);
+      // primed: skip if not required
+      if (prequire.find(i->lhs) == prequire.end()
+          && prequire.find(~i->lhs) == prequire.end())
+        continue;
+      // encode PRIMED form into CNF
+      Minisat::Lit r0 = primeLit(i->lhs, sslv), 
+        r1 = primeLit(i->rhs0, sslv), 
+        r2 = primeLit(i->rhs1, sslv);
+      sslv->addClause(~r0, r1);
+      sslv->addClause(~r0, r2);
+      sslv->addClause(~r1, ~r2, r0);
+      // require arguments
+      prequire.insert(i->rhs0);
+      prequire.insert(i->rhs1);
+    }
+    // assert literal for true
+    sslv->addClause(btrue());
+    // assert ~error
+    sslv->addClause(~_error);
+    // assert l' = f for each latch l
+    for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
+      Minisat::Lit platch = primeLit(i->lit(false)), f = nextStateFn(*i);
+      sslv->addClause(~platch, f);
+      sslv->addClause(~f, platch);
+    }
+    sslv->eliminate(true);
   }
-  // assert literal for true
-  slv.addClause(btrue());
-  // assert ~error, constraints, and primed constraints
-  slv.addClause(~_error);
-  for (LitVec::const_iterator i = constraints.begin(); 
-        i != constraints.end(); ++i) {
-    slv.addClause(*i);
+  // load the clauses from the simplified context
+  while (slv.nVars() < sslv->nVars()) slv.newVar();
+  for (Minisat::ClauseIterator c = sslv->clausesBegin(); 
+       c != sslv->clausesEnd(); ++c) {
+    const Minisat::Clause & cls = *c;
+    Minisat::vec<Minisat::Lit> cls_;
+    for (int i = 0; i < cls.size(); ++i)
+      cls_.push(cls[i]);
+    slv.addClause_(cls_);
   }
-  // assert l' = f for each latch l
-  for (VarVec::const_iterator i = beginLatches(); i != endLatches(); ++i) {
-    Minisat::Lit platch = primeLit(i->lit(false)), f = nextStateFn(*i);
-    slv.addClause(~platch, f);
-    slv.addClause(~f, platch);
-  }
-
-  for (LitVec::const_iterator i = constraints.begin(); 
-        i != constraints.end(); ++i)
-    slv.addClause(primeLit(*i));
+  for (Minisat::TrailIterator c = sslv->trailBegin(); 
+       c != sslv->trailEnd(); ++c)
+    slv.addClause(*c);
+  if (withConstraints)
+    for (LitVec::const_iterator i = constraints.begin(); 
+         i != constraints.end(); ++i) {
+      slv.addClause(*i);
+      slv.addClause(primeLit(*i));
+    }
 }
 
 void Model::initSimpDrContext() {

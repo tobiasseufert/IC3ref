@@ -215,8 +215,8 @@ public:
   // Var/Minisat::Lit.  Once lockPrimes() is called, primeVar() fails
   // (with an assertion violation) if it is asked to create a new
   // variable.
-  const Var & primeVar(const Var & v, Minisat::Solver * slv = NULL);
-  Minisat::Lit primeLit(Minisat::Lit lit, Minisat::Solver * slv = NULL) {
+  const Var & primeVar(const Var & v, Minisat::SimpSolver * slv = NULL);
+  Minisat::Lit primeLit(Minisat::Lit lit, Minisat::SimpSolver * slv = NULL) {
     const Var & pv = primeVar(varOfLit(lit), slv);
     return pv.lit(Minisat::sign(lit));
   }
@@ -285,7 +285,7 @@ public:
   // negation of the error are always added --- except that the primed
   // form of the invariant constraints are not asserted if
   // !primeConstraints.
-  void loadTransitionRelation(Minisat::Solver & slv);
+  void loadTransitionRelation(Minisat::Solver & slv, bool withConstraints = true);
   void loadDrTransitionRelation(Minisat::Solver & slv, 
                               bool withConstraints = true);
   // Loads the initial condition into the solver.

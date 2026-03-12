@@ -123,7 +123,7 @@ namespace IC3 {
       litOrder(), slimLitOrder(),
       numLits(0), numUpdates(0), maxDepth(1), maxCTGs(3),
       maxJoins(1<<20), micAttempts(3), cexState(0), nQuery(0), nCTI(0), nCTG(0),
-      nmic(0), satTime(0), nCoreReduced(0), nAbortJoin(0), nAbortMic(0)
+      nmic(0), satTime(0), liftTime(0), nCoreReduced(0), nAbortJoin(0), nAbortMic(0)
     {
       slimLitOrder.heuristicLitOrder = &litOrder;
 
@@ -430,6 +430,7 @@ namespace IC3 {
       ++nQuery; startTimer();  // stats
       bool rv = lifts->solve(assumps);
       endTimer(satTime);
+      endTimer(liftTime);
       if(rv) {
         throw runtime_error{"Lifting failed. Perhaps invariant constraints or non-determinism issues?"};
       }
@@ -828,7 +829,7 @@ namespace IC3 {
     }
 
     int nQuery, nCTI, nCTG, nmic;
-    clock_t startTime, satTime;
+    clock_t startTime, satTime, liftTime;
     int nCoreReduced, nAbortJoin, nAbortMic;
     clock_t time() {
       struct tms t;
@@ -845,6 +846,7 @@ namespace IC3 {
       etime -= startTime;
       if (!etime) etime = 1;
       cout << ". % SAT:        " << (int) (100 * (((double) satTime) / ((double) etime))) << endl;
+      cout << ". % Lifting:    " << (int) (100 * (((double) liftTime) / ((double) etime))) << endl;
       cout << ". K:            " << k << endl;
       cout << ". # Queries:    " << nQuery << endl;
       cout << ". # CTIs:       " << nCTI << endl;

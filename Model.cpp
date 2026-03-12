@@ -90,21 +90,13 @@ Minisat::Solver * Model::newDrSolver() const {
     throw runtime_error("Dual rail variables were supposed to be created, but there might still be new variables of the actual problem.");
   }
   Minisat::Solver * slv = new Minisat::Solver();
+  slv->phase_saving = 2;
   // load all variables to maintain alignment
   // ask the solver to decide (0,0) by default (except for inputs)
   slv->newVar(); // constant 0/1
   for (size_t i = 1; i < vars.size(); ++i) {
-    //if (isInput(2 * i - 1)) {// FIXME: hacky
-   //   Minisat::Var nv = slv->newVar(Minisat::l_False); // preferrably do not lift inputs
-   // }
-   // else
-      slv->newVar(Minisat::l_True); // True equals to 0 ... Minisat interface issue there, but ok.
-    Minisat::Var nv_dual;
-    //if (isInput(2 * i)) {
-    //  nv_dual = slv->newVar(Minisat::l_False);
-    //}
-    //else 
-      nv_dual = slv->newVar(Minisat::l_True);
+    slv->newVar(Minisat::l_True); // True equals to 0 ... Minisat interface issue there, but ok.
+    Minisat::Var nv_dual = slv->newVar(Minisat::l_True);
 
     if ((nv_dual / 2) != vars[i].var()) {
       throw runtime_error("Variable alignment in solvers broken.");

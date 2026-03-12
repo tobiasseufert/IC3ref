@@ -858,6 +858,12 @@ namespace IC3 {
       cout << ". # Int. joins: " << nAbortJoin << endl;
       cout << ". # Int. mics:  " << nAbortMic << endl;
       if (numUpdates) cout << ". Avg lits/cls: " << numLits / numUpdates << endl;
+
+      for (size_t i = 0; i < frames.size(); ++i) {
+        cout << ". SAT statistics frame " << i << ":" << endl;
+        frames[i].consecution->printStats();
+        cout << "-----" << endl;
+      }
     }
 
     friend bool check(Model &, int, bool, bool, const CertOpt &);

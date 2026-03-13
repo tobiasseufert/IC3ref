@@ -469,29 +469,38 @@ void Model::loadDrAndForgetful(Minisat::Solver& slv, const AigRow& and_gate, boo
   lhs = prime? primeLit(and_gate.lhs) : and_gate.lhs;
   rhs0 = prime? primeLit(and_gate.rhs0) : and_gate.rhs0;
   rhs1 = prime? primeLit(and_gate.rhs1) : and_gate.rhs1;
-    
-  DrLit lhs_dr{Minisat::var(lhs)}, 
-        rhs0_dr{Minisat::var(rhs0)}, 
-        rhs1_dr{Minisat::var(rhs1)};
+
+  DrLit lhs_dr{Minisat::var(lhs)};
   
   Minisat::Lit rhs0_0, rhs1_0;
   Minisat::Lit rhs0_1, rhs1_1;
 
+  auto eval_rhs = [this](Minisat::Lit rhs, Minisat::Lit& rhs_0, Minisat::Lit& rhs_1) {
+    // Constant inputs have fixed truth values and must not be dual-railed.
+    if (rhs == btrue()) {
+      rhs_0 = bfalse();
+      rhs_1 = btrue();
+      return;
+    }
+    if (rhs == bfalse()) {
+      rhs_0 = btrue();
+      rhs_1 = bfalse();
+      return;
+    }
+
+    DrLit rhs_dr{Minisat::var(rhs)};
+    if (Minisat::sign(rhs)) { // evaluate NOT
+      rhs_0 = rhs_dr.One();
+      rhs_1 = rhs_dr.Zero();
+    } else {
+      rhs_0 = rhs_dr.Zero();
+      rhs_1 = rhs_dr.One();
+    }
+  };
+
   assert (!Minisat::sign(and_gate.lhs)); // by AIGER design
-  if (Minisat::sign(and_gate.rhs0)) { // evaluate NOT
-    rhs0_0 = rhs0_dr.One();
-    rhs0_1 = rhs0_dr.Zero();
-  } else {
-    rhs0_0 = rhs0_dr.Zero();
-    rhs0_1 = rhs0_dr.One();
-  }
-  if (Minisat::sign(and_gate.rhs1)) { // evaluate NOT
-    rhs1_0 = rhs1_dr.One();
-    rhs1_1 = rhs1_dr.Zero();
-  } else {
-    rhs1_0 = rhs1_dr.Zero();
-    rhs1_1 = rhs1_dr.One();
-  }
+  eval_rhs(rhs0, rhs0_0, rhs0_1);
+  eval_rhs(rhs1, rhs1_0, rhs1_1);
   
   slv.addClause(rhs0_0, rhs1_0, ~(lhs_dr.Zero()));
   slv.addClause(rhs1_1, ~(lhs_dr.One()));

@@ -64,3 +64,9 @@ target_link_libraries(IC3
     aiger
     minisat-lib-static
 )
+
+
+if(IC3_STATIC_LINKING)
+  # Request a fully static executable (including libc).
+  target_link_options(IC3 PRIVATE -static -static-libstdc++ -static-libgcc)
+endif()

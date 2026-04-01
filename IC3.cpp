@@ -128,9 +128,9 @@ namespace IC3 {
       slimLitOrder.heuristicLitOrder = &litOrder;
 
       // construct lifting solver
-      lifts = model.newSolver();
+      lifts = model.newDrSolver();
       // don't assert primed invariant constraints
-      model.loadTransitionRelation(*lifts, false);
+      model.loadDrTransitionRelation(*lifts, false);
       // assert notInvConstraints (in stateOf) when lifting
       notInvConstraints = Minisat::mkLit(lifts->newVar());
       Minisat::vec<Minisat::Lit> cls;
@@ -381,8 +381,8 @@ namespace IC3 {
       state(st).successor = succ;
       LitVec latches;
       MSLitVec assumps;
-      assumps.capacity(2 * (model.endInputs() - model.beginInputs()) +
-                           (model.endLatches() - model.beginLatches())
+      assumps.capacity(4 * (model.endInputs() - model.beginInputs()) +
+                        2 * (model.endLatches() - model.beginLatches())
                           + 1);
 
       Minisat::Lit act = Minisat::mkLit(lifts->newVar());  // activation literal
@@ -391,13 +391,13 @@ namespace IC3 {
       cls.push(~act);
       cls.push(notUnprimedInvConstraints);  // predecessor must satisfy inv. constraint
       if (succ == 0) {
-        cls.push(~model.primedError());
+        AddDrLitToCl(~model.primedError(), cls);
         cls.push(notInvConstraints);  // successor must satisfy inv. constraint
       }
       else
         for (LitVec::const_iterator i = state(succ).latches.begin(); 
              i != state(succ).latches.end(); ++i)
-          cls.push(model.primeLit(~*i));
+          AddDrLitToCl(model.primeLit(~*i), cls);
       lifts->addClause_(cls);
 
       // extract primary inputs (can also be 01X-generalized)
@@ -406,44 +406,25 @@ namespace IC3 {
       for (VarVec::const_iterator i = model.beginInputs(); 
            i != model.endInputs(); ++i) {
         DrLit lit_dr = getDrModel(*i, *(fr.consecution));
+        AssumeDrLit(lit_dr, assumps);
         // don't care inputs will be filled with zeros
         Minisat::Lit pi = lit_dr.GetLitIfDef();
         state(st).inputs.push_back(pi);  // record full inputs
-        assumps.push(pi);
       }
       for (VarVec::const_iterator i = model.beginInputs(); 
            i != model.endInputs(); ++i) {
         DrLit lit_dr_p = getDrModel(model.primeVar(*i), *(fr.consecution));
-        Minisat::Lit pi_p = lit_dr_p.GetLitIfDef();
-        assumps.push(pi_p);
+        AssumeDrLit(lit_dr_p, assumps);
       }
-      size_t sz = assumps.size();
       // extract latches
       for (VarVec::const_iterator i = model.beginLatches(); 
            i != model.endLatches(); ++i) {
         DrLit lit_dr = getDrModel(*i, *(fr.consecution));
-        if (!lit_dr.IsDontCare()) {
-          Minisat::Lit la = lit_dr.GetLitIfDef();
-          //state(st).latches.push_back(la);
-          latches.push_back(la);
-          assumps.push(la);
-        }
+        Minisat::Lit la = lit_dr.GetLitIfDef();
+        latches.push_back(la);
+        if (!lit_dr.IsDontCare()) 
+          AssumeDrLit(lit_dr, assumps);
       }
-      Minisat::Lit act = Minisat::mkLit(lifts->newVar());  // activation literal
-      assumps.push(act);
-      Minisat::vec<Minisat::Lit> cls;
-      cls.push(~act);
-      cls.push(notUnprimedInvConstraints);  // successor must satisfy inv. constraint
-      if (succ == 0) {
-        AddDrLitToCl(~model.primedError(), cls);
-        cls.push(notInvConstraints);  // predecessor must satisfy inv. constraint
-      }
-      else {
-        for (LitVec::const_iterator i = state(succ).latches.begin(); 
-            i != state(succ).latches.end(); ++i)
-          AddDrLitToCl(model.primeLit(~*i), cls);
-      }
-      lifts->addClause_(cls);
       ++nQuery; startTimer();  // stats
       bool rv = lifts->solve(assumps);
       endTimer(satTime);
@@ -452,9 +433,13 @@ namespace IC3 {
         throw runtime_error{"Lifting failed. Perhaps invariant constraints or non-determinism issues?"};
       }
       // obtain lifted latch set from unsat core
-      for (LitVec::const_iterator i = latches.begin(); i != latches.end(); ++i)
-        if (lifts->conflict.has(~*i))
-          state(st).latches.push_back(*i);  // record lifted latches
+      // core extraction needs DR encoding consideration
+      for (LitVec::const_iterator i = latches.begin(); 
+            i != latches.end(); ++i) {
+        DrLit neg_latch_dr {~(*i)};
+        if (neg_latch_dr.IsInFinalConflict(*(lifts)))
+          state(st).latches.push_back(*i);
+      }
       // deactivate negation of successor
       lifts->releaseVar(~act);
 #ifndef NDEBUG

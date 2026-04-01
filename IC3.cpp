@@ -397,7 +397,7 @@ namespace IC3 {
       else
         for (LitVec::const_iterator i = state(succ).latches.begin(); 
              i != state(succ).latches.end(); ++i)
-          AddDrLitToCl(model.primeLit(~*i), cls);
+          AddDrLitToCl(~model.primeLit(*i), cls);
       lifts->addClause_(cls);
 
       // extract primary inputs (can also be 01X-generalized)
@@ -407,9 +407,10 @@ namespace IC3 {
            i != model.endInputs(); ++i) {
         DrLit lit_dr = getDrModel(*i, *(fr.consecution));
         AssumeDrLit(lit_dr, assumps);
-        // don't care inputs will be filled with zeros
-        Minisat::Lit pi = lit_dr.GetLitIfDef();
-        state(st).inputs.push_back(pi);  // record full inputs
+        if (!lit_dr.IsDontCare()) {
+          Minisat::Lit inp = lit_dr.GetLitIfDef();
+          state(st).inputs.push_back(inp);  // record full inputs
+        }
       }
       for (VarVec::const_iterator i = model.beginInputs(); 
            i != model.endInputs(); ++i) {
@@ -420,10 +421,11 @@ namespace IC3 {
       for (VarVec::const_iterator i = model.beginLatches(); 
            i != model.endLatches(); ++i) {
         DrLit lit_dr = getDrModel(*i, *(fr.consecution));
-        Minisat::Lit la = lit_dr.GetLitIfDef();
-        latches.push_back(la);
-        if (!lit_dr.IsDontCare()) 
+        if (!lit_dr.IsDontCare()) {
+          Minisat::Lit la = lit_dr.GetLitIfDef();
+          latches.push_back(la);
           AssumeDrLit(lit_dr, assumps);
+        }
       }
       ++nQuery; startTimer();  // stats
       bool rv = lifts->solve(assumps);
@@ -763,8 +765,8 @@ namespace IC3 {
            i != model.endInputs(); ++i) {
           DrLit lit_dr = getDrModel(model.primeVar(*i), *(frontier.consecution));
           if (!lit_dr.IsDontCare()) {
-            Minisat::Lit pi = lit_dr.GetLitIfDef();
-            curr_bad_input.push_back(pi);  // record full inputs
+            Minisat::Lit inp = lit_dr.GetLitIfDef();
+            curr_bad_input.push_back(inp);  // record full inputs
           }
         }
         // handle CTI with error successor
